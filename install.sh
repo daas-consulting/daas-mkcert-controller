@@ -142,7 +142,7 @@ Commands:
     help        Show this help message
 
 Options:
-    --install-ca=VALUE      Set CA installation (true/false/yes/no/si/no/1/0)
+    --install-ca=VALUE      Set CA installation (true/false/yes/no/si/no/1/0/t/f/y/n/s/n)
     --disable-install-ca    Disable automatic CA installation (alias for --install-ca=false)
 
 Environment Variables:
@@ -150,7 +150,7 @@ Environment Variables:
     IMAGE_NAME          Docker image name (default: daas-mkcert-controller)
     IMAGE_TAG           Docker image tag (default: latest)
     INSTALL_CA          Install CA in trust store (default: true)
-                        Accepted values: true/false, yes/no, si/no, 1/0
+                        Accepted values: true/false, yes/no, si/no, 1/0, t/f, y/n, s/n
     TRAEFIK_DIR         Traefik config directory
                         Default (root):     /etc/traefik
                         Default (non-root): ~/.traefik

@@ -6,7 +6,7 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 
 - **Instalación con un solo comando**: Script Bash autoinstalable que construye, instala o desinstala completamente el servicio
 - **CA instalada en el host**: La CA de mkcert se instala automáticamente en el host Docker (no en el contenedor) para que los navegadores confíen en los certificados
-- **Unico método de instalación**: Unificado todo en uno
+- **Único método de instalación**: Unificado todo en uno
 - **Detección automática de dominios**: Monitorea eventos de Docker y labels de Traefik para detectar dominios `*.localhost` con TLS habilitado desde un contenedor
 - **Filtrado por TLS**: Solo genera certificados para rutas que tengan TLS explícitamente habilitado desde un contenedor
 - **Generación automática de certificados TLS**: Crea certificados válidos con mkcert sin intervención manual desde un contenedor
