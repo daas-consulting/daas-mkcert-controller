@@ -27,10 +27,10 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 
 ## 🔧 Instalación Rápida
 
-### Opción 1: Instalación directa con curl
+### Opción 1: Instalación directa con curl (Recomendada)
 
 ```bash
-# Instalación básica (CA se instala por defecto)
+# Instalación básica (CA se instala automáticamente en el host)
 curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | bash
 
 # Instalación sin CA
@@ -60,6 +60,22 @@ chmod +x install.sh
 # o
 INSTALL_CA=false ./install.sh install
 ```
+
+### Opción 3: Instalación sin instalar mkcert en el host
+
+Si prefieres no instalar mkcert en tu máquina host, puedes usar el método basado en Docker:
+
+```bash
+# Ver documentación completa de métodos alternativos
+cat CA-INSTALLATION.md
+
+# O usar el script Docker
+./install-ca-docker.sh generate  # Genera CA usando Docker
+./install-ca-docker.sh install   # Instala CA en el sistema
+./install.sh install              # Instala el controlador
+```
+
+📖 **Más información**: [CA-INSTALLATION.md](CA-INSTALLATION.md) - Guía completa de métodos de instalación de CA
 
 ## 📖 Uso
 
@@ -128,6 +144,8 @@ Por defecto `INSTALL_CA=true`:
 **Importante**: La CA se instala en el sistema host (donde corre Docker y el navegador), no dentro del contenedor. Esto permite que los navegadores en tu máquina confíen en los certificados generados.
 
 Para deshabilitarla, usa `--disable-install-ca` o `INSTALL_CA=false`.
+
+**📖 Métodos alternativos de instalación**: Si prefieres no instalar mkcert en el host, consulta [CA-INSTALLATION.md](CA-INSTALLATION.md) para usar un método basado en Docker con el script `install-ca-docker.sh`.
 
 ### 3. Monitoreo y generación de certificados
 
