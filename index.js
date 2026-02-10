@@ -7,12 +7,13 @@ const fs = require('fs');
 const path = require('path');
 const { printBanner } = require('./banner');
 const { parseBool } = require('./parseBool');
+const { validateNotEmpty, validateDirectory } = require('./validateConfig');
 
 // Configuration from environment variables
 const INSTALL_CA = parseBool(process.env.INSTALL_CA, true, 'INSTALL_CA');
-const TRAEFIK_DIR = process.env.TRAEFIK_DIR || '/etc/traefik';
-const CERTS_DIR = process.env.CERTS_DIR || '/certs';
-const MKCERT_CA_DIR = process.env.MKCERT_CA_DIR || '/root/.local/share/mkcert';
+const TRAEFIK_DIR = validateNotEmpty(process.env.TRAEFIK_DIR || '/etc/traefik', 'TRAEFIK_DIR');
+const CERTS_DIR = validateNotEmpty(process.env.CERTS_DIR || '/certs', 'CERTS_DIR');
+const MKCERT_CA_DIR = validateNotEmpty(process.env.MKCERT_CA_DIR || '/root/.local/share/mkcert', 'MKCERT_CA_DIR');
 const THROTTLE_MS = parseInt(process.env.THROTTLE_MS || '300', 10);
 const SCHEDULED_INTERVAL_MS = parseInt(process.env.SCHEDULED_INTERVAL_MS || '60000', 10); // 1 minute
 
@@ -34,20 +35,11 @@ function log(message, level = 'INFO') {
 // Validate read/write access to a directory
 function validateAccess(dir, description) {
   try {
-    if (!fs.existsSync(dir)) {
-      log(`Creating directory: ${dir}`, 'INFO');
-      fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
-    }
-    
-    // Test write access
-    const testFile = path.join(dir, '.access_test');
-    fs.writeFileSync(testFile, 'test');
-    fs.unlinkSync(testFile);
-    
+    validateDirectory(dir, description);
     log(`✓ Read/write access validated for ${description}: ${dir}`, 'INFO');
     return true;
   } catch (error) {
-    log(`✗ No read/write access to ${description}: ${dir} - ${error.message}`, 'ERROR');
+    log(`✗ ${error.message}`, 'ERROR');
     return false;
   }
 }
