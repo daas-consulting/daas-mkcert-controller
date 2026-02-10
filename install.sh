@@ -33,27 +33,48 @@ MKCERT_CA_DIR="${MKCERT_CA_DIR:-$HOME/.local/share/mkcert}"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+GRAY='\033[0;90m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Logging functions
+# Syslog RFC 5424 facility: local0 (16)
+_SYSLOG_FACILITY=16
+_APP_NAME="daas-mkcert-controller"
+_HOSTNAME=$(hostname)
+
+# Syslog RFC 5424 log function
+# Usage: _syslog_log <severity_num> <level_label> <color> <message>
+_syslog_log() {
+    local severity="$1"
+    local level="$2"
+    local color="$3"
+    local message="$4"
+    local priority=$(( _SYSLOG_FACILITY * 8 + severity ))
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")
+    local header="<${priority}>1 ${timestamp} ${_HOSTNAME} ${_APP_NAME} $$ - -"
+    echo -e "${GRAY}${header}${NC} ${color}[${level}]${NC} ${color}${message}${NC}"
+}
+
+# Logging functions - Syslog RFC 5424 format with colors
 log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+    _syslog_log 6 "INFO" "${GREEN}" "$1"
 }
 
 log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+    _syslog_log 4 "WARN" "${YELLOW}" "$1"
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    _syslog_log 3 "ERROR" "${RED}" "$1"
 }
 
 log_success() {
-    echo -e "${GREEN}[✓]${NC} $1"
+    _syslog_log 6 "INFO" "${GREEN}" "✓ $1"
 }
 
 log_fail() {
-    echo -e "${RED}[✗]${NC} $1"
+    _syslog_log 3 "ERROR" "${RED}" "✗ $1"
 }
 
 # Display banner with daas ASCII logo
@@ -488,6 +509,8 @@ const chokidar = require('chokidar');
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const { printBanner, isBannerShown } = require('./banner');
 const { parseBool } = require('./parseBool');
 
 // Configuration from environment variables
@@ -507,10 +530,60 @@ let isReconciling = false;
 let scheduledTimer = null;
 let lastReconcileTime = 0;
 
-// Logging utility
+// ANSI color codes
+const RESET = '\x1b[0m';
+const GRAY = '\x1b[90m';
+const RED = '\x1b[31m';
+const RED_BOLD = '\x1b[1;31m';
+const BG_RED_WHITE_BOLD = '\x1b[41;37;1m';
+const BG_RED_WHITE = '\x1b[41;37m';
+const GREEN = '\x1b[32m';
+const YELLOW = '\x1b[33m';
+const CYAN = '\x1b[36m';
+
+// Syslog RFC 5424 severity mapping
+const SYSLOG_SEVERITY = {
+  EMERG: 0,
+  ALERT: 1,
+  CRIT: 2,
+  ERROR: 3,
+  WARN: 4,
+  NOTICE: 5,
+  INFO: 6,
+  DEBUG: 7,
+};
+
+// Syslog facility: local0 (16)
+const SYSLOG_FACILITY = 16;
+
+const APP_NAME = 'daas-mkcert-controller';
+const HOSTNAME = os.hostname();
+
+// ANSI color sequences for each severity level
+const LEVEL_COLORS = {
+  EMERG: BG_RED_WHITE_BOLD,
+  ALERT: BG_RED_WHITE,
+  CRIT: RED_BOLD,
+  ERROR: RED,
+  WARN: YELLOW,
+  NOTICE: CYAN,
+  INFO: GREEN,
+  DEBUG: GRAY,
+};
+
+// Logging utility - Syslog RFC 5424 format with ANSI colors
+// Format: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG
 function log(message, level = 'INFO') {
+  const severity = SYSLOG_SEVERITY[level] !== undefined ? SYSLOG_SEVERITY[level] : SYSLOG_SEVERITY.INFO;
+  const priority = SYSLOG_FACILITY * 8 + severity;
   const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] [${level}] ${message}`);
+  const procId = process.pid;
+  const color = LEVEL_COLORS[level] || LEVEL_COLORS.INFO;
+
+  const header = `<${priority}>1 ${timestamp} ${HOSTNAME} ${APP_NAME} ${procId} - -`;
+  const levelTag = `[${level}]`;
+
+  console.log(`${GRAY}${header}${RESET} ${color}${levelTag}${RESET} ${color}${message}${RESET}`);
 }
 
 // Validate read/write access to a directory
@@ -859,6 +932,9 @@ function monitorTraefikFiles() {
 
 // Main startup function
 async function main() {
+  if (!isBannerShown()) {
+    printBanner();
+  }
   log('=== daas-mkcert-controller starting ===', 'INFO');
   log(`Configuration:`, 'INFO');
   log(`  - INSTALL_CA: ${INSTALL_CA}`, 'INFO');
@@ -969,9 +1045,14 @@ PARSEBOOL_JS_EOF
     cat > "$work_dir/banner.js" << 'BANNER_JS_EOF'
 'use strict';
 
+// Track whether the banner has been shown
+let bannerShown = false;
+
 /**
  * Prints the daas ASCII logo banner with colored output.
  * Uses figlet graffiti font for "daas" with lolcat-style rainbow colors.
+ * Uses ANSI escape codes directly for colored output.
+ * Tracks if the banner has been shown to avoid duplicates.
  */
 function printBanner() {
   const pkg = require('./package.json');
@@ -1063,9 +1144,18 @@ function printBanner() {
   output.push('');
 
   console.log(output.join('\n'));
+  bannerShown = true;
 }
 
-module.exports = { printBanner };
+/**
+ * Returns whether the banner has been shown.
+ * @returns {boolean}
+ */
+function isBannerShown() {
+  return bannerShown;
+}
+
+module.exports = { printBanner, isBannerShown };
 BANNER_JS_EOF
 
     # Create .dockerignore

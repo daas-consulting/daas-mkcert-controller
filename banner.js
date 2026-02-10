@@ -1,8 +1,13 @@
 'use strict';
 
+// Track whether the banner has been shown
+let bannerShown = false;
+
 /**
  * Prints the daas ASCII logo banner with colored output.
  * Uses figlet graffiti font for "daas" with lolcat-style rainbow colors.
+ * Uses ANSI escape codes directly for colored output.
+ * Tracks if the banner has been shown to avoid duplicates.
  */
 function printBanner() {
   const pkg = require('./package.json');
@@ -94,6 +99,15 @@ function printBanner() {
   output.push('');
 
   console.log(output.join('\n'));
+  bannerShown = true;
 }
 
-module.exports = { printBanner };
+/**
+ * Returns whether the banner has been shown.
+ * @returns {boolean}
+ */
+function isBannerShown() {
+  return bannerShown;
+}
+
+module.exports = { printBanner, isBannerShown };
