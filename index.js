@@ -9,6 +9,7 @@ const os = require('os');
 const { printBanner, isBannerShown } = require('./banner');
 const { parseBool } = require('./parseBool');
 const { validateNotEmpty, validateDirectory } = require('./validateConfig');
+const { parseTraefikLabels, extractDomainsFromLabels } = require('./traefikLabels');
 
 // Configuration from environment variables
 const INSTALL_CA = parseBool(process.env.INSTALL_CA, true, 'INSTALL_CA');
@@ -156,56 +157,6 @@ async function checkTraefikRunning() {
   }
 }
 
-// Parse Traefik labels into a structured object
-function parseTraefikLabels(labels) {
-  const routers = {};
-  
-  for (const [key, value] of Object.entries(labels)) {
-    // Parse label keys like: traefik.http.routers.myrouter.rule
-    const routerMatch = key.match(/^traefik\.http\.routers\.([^.]+)\.(.+)$/);
-    if (routerMatch) {
-      const routerName = routerMatch[1];
-      const property = routerMatch[2];
-      
-      if (!routers[routerName]) {
-        routers[routerName] = {};
-      }
-      routers[routerName][property] = value;
-    }
-  }
-  
-  return routers;
-}
-
-// Extract localhost domains from Traefik labels (only if TLS is enabled)
-function extractDomainsFromLabels(labels) {
-  const domains = new Set();
-  const routers = parseTraefikLabels(labels);
-  
-  for (const [routerName, router] of Object.entries(routers)) {
-    // Only process routers with TLS enabled
-    if (!router.tls || router.tls !== 'true') {
-      continue;
-    }
-    
-    // Extract domains from the rule
-    if (router.rule) {
-      const matches = router.rule.match(/Host\(`([^`]+\.localhost)`\)/g);
-      if (matches) {
-        matches.forEach(match => {
-          const domain = match.match(/Host\(`([^`]+)`\)/)[1];
-          if (domain.endsWith('.localhost')) {
-            log(`Found TLS-enabled domain: ${domain} (router: ${routerName})`, 'DEBUG');
-            domains.add(domain);
-          }
-        });
-      }
-    }
-  }
-  
-  return Array.from(domains);
-}
-
 // Generate certificate for a domain
 function generateCertificate(domain) {
   try {
@@ -306,7 +257,7 @@ async function reconcile() {
     
     for (const containerInfo of containers) {
       if (containerInfo.Labels) {
-        const domains = extractDomainsFromLabels(containerInfo.Labels);
+        const domains = extractDomainsFromLabels(containerInfo.Labels, log);
         domains.forEach(d => allDomains.add(d));
       }
     }
