@@ -322,9 +322,175 @@ check_traefik() {
     fi
 }
 
+# Install mkcert on host if not already installed
+install_mkcert_on_host() {
+    log_info "Checking for mkcert installation on host..."
+    
+    if command -v mkcert &> /dev/null; then
+        log_success "mkcert is already installed on host"
+        return 0
+    fi
+    
+    log_info "mkcert not found on host, attempting to install..."
+    
+    # Detect Linux distribution
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        local distro="$ID"
+    else
+        log_error "Cannot detect Linux distribution"
+        return 1
+    fi
+    
+    case "$distro" in
+        ubuntu|debian|pop)
+            log_info "Installing mkcert for Debian/Ubuntu..."
+            if ! sudo apt-get update && sudo apt-get install -y mkcert; then
+                log_warn "Failed to install mkcert via apt, trying alternative method..."
+                install_mkcert_binary
+            else
+                log_success "mkcert installed successfully via apt"
+            fi
+            ;;
+        fedora|rhel|centos)
+            log_info "Installing mkcert for Fedora/RHEL/CentOS..."
+            if ! sudo dnf install -y mkcert; then
+                log_warn "Failed to install mkcert via dnf, trying alternative method..."
+                install_mkcert_binary
+            else
+                log_success "mkcert installed successfully via dnf"
+            fi
+            ;;
+        arch|manjaro)
+            log_info "Installing mkcert for Arch Linux..."
+            if ! sudo pacman -S --noconfirm mkcert; then
+                log_warn "Failed to install mkcert via pacman, trying alternative method..."
+                install_mkcert_binary
+            else
+                log_success "mkcert installed successfully via pacman"
+            fi
+            ;;
+        *)
+            log_warn "Unknown distribution: $distro, trying direct binary installation..."
+            install_mkcert_binary
+            ;;
+    esac
+    
+    # Verify installation
+    if command -v mkcert &> /dev/null; then
+        log_success "mkcert is now available on host"
+        return 0
+    else
+        log_error "Failed to install mkcert on host"
+        return 1
+    fi
+}
+
+# Install mkcert binary directly from GitHub releases
+install_mkcert_binary() {
+    log_info "Installing mkcert from GitHub releases..."
+    
+    local arch=$(uname -m)
+    local mkcert_url
+    
+    case "$arch" in
+        x86_64|amd64)
+            mkcert_url="https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-v1.4.4-linux-amd64"
+            ;;
+        aarch64|arm64)
+            mkcert_url="https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-v1.4.4-linux-arm64"
+            ;;
+        armv7l|armhf)
+            mkcert_url="https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-v1.4.4-linux-arm"
+            ;;
+        *)
+            log_error "Unsupported architecture: $arch"
+            return 1
+            ;;
+    esac
+    
+    local install_dir="$HOME/.local/bin"
+    mkdir -p "$install_dir"
+    
+    if curl -fsSL "$mkcert_url" -o "$install_dir/mkcert"; then
+        chmod +x "$install_dir/mkcert"
+        
+        # Add to PATH if not already there
+        if [[ ":$PATH:" != *":$install_dir:"* ]]; then
+            export PATH="$install_dir:$PATH"
+            log_info "Added $install_dir to PATH for this session"
+            log_info "To make it permanent, add this to your ~/.bashrc or ~/.zshrc:"
+            log_info "  export PATH=\"$install_dir:\$PATH\""
+        fi
+        
+        log_success "mkcert binary installed to $install_dir/mkcert"
+        return 0
+    else
+        log_error "Failed to download mkcert binary"
+        return 1
+    fi
+}
+
+# Install CA on host machine
+install_ca_on_host() {
+    if [[ "$INSTALL_CA" != "true" ]]; then
+        log_info "CA installation not requested (INSTALL_CA != true)"
+        return 0
+    fi
+    
+    log_info "Installing CA on host machine..."
+    
+    # Ensure mkcert is installed on host
+    if ! install_mkcert_on_host; then
+        log_error "Cannot install CA: mkcert is not available on host"
+        log_error "Please install mkcert manually and try again"
+        log_error "Visit: https://github.com/FiloSottile/mkcert#installation"
+        return 1
+    fi
+    
+    # Set CAROOT to our custom location
+    export CAROOT="$MKCERT_CA_DIR"
+    
+    # Check if CA already exists
+    if [[ -f "$MKCERT_CA_DIR/rootCA.pem" ]] && [[ -f "$MKCERT_CA_DIR/rootCA-key.pem" ]]; then
+        log_info "CA already exists at $MKCERT_CA_DIR"
+        log_info "Installing existing CA in host trust store..."
+        if mkcert -install; then
+            log_success "CA installed successfully in host trust store"
+        else
+            log_warn "Failed to install CA in host trust store (this may require sudo)"
+            log_info "You may need to run: CAROOT=$MKCERT_CA_DIR sudo -E mkcert -install"
+        fi
+    else
+        log_info "Creating new CA and installing in host trust store..."
+        if mkcert -install; then
+            log_success "CA created and installed successfully in host trust store"
+        else
+            log_error "Failed to create and install CA"
+            return 1
+        fi
+    fi
+    
+    # Verify CA files exist
+    if [[ -f "$MKCERT_CA_DIR/rootCA.pem" ]] && [[ -f "$MKCERT_CA_DIR/rootCA-key.pem" ]]; then
+        log_success "CA files verified at $MKCERT_CA_DIR"
+        return 0
+    else
+        log_error "CA files not found after installation"
+        return 1
+    fi
+}
+
 # Verify local dependencies (mkcert)
 verify_local_dependencies() {
     log_info "Verifying local dependencies..."
+    
+    # Only verify curl is available (needed for downloading mkcert)
+    if ! command -v curl &> /dev/null; then
+        log_error "curl is required but not installed"
+        log_error "Please install curl and try again"
+        return 1
+    fi
     
     log_success "All local dependencies verified"
     return 0
@@ -1345,6 +1511,13 @@ install_controller() {
     
     # Verify certificates and CA
     verify_certificates
+    
+    # Install CA on host machine (before starting container)
+    if ! install_ca_on_host; then
+        log_error "CA installation failed"
+        log_error "You can disable CA installation with: INSTALL_CA=false $0 install"
+        exit 1
+    fi
     
     # Check if Traefik is running
     if ! check_traefik; then

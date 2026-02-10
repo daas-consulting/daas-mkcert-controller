@@ -95,7 +95,7 @@ function validateAccess(dir, description) {
   }
 }
 
-// Install mkcert CA if requested
+// Verify mkcert CA exists (installation should be done on host, not in container)
 function installCA() {
   if (!INSTALL_CA) {
     log('CA installation not requested (INSTALL_CA != true)', 'INFO');
@@ -106,7 +106,7 @@ function installCA() {
   
   // Validate access to CA directory
   if (!validateAccess(MKCERT_CA_DIR, 'mkcert CA directory')) {
-    log('Cannot install CA: insufficient permissions', 'ERROR');
+    log('Cannot verify CA: insufficient permissions', 'ERROR');
     return false;
   }
 
@@ -116,16 +116,20 @@ function installCA() {
     const rootCA = path.join(MKCERT_CA_DIR, 'rootCA.pem');
     
     if (fs.existsSync(rootCAKey) && fs.existsSync(rootCA)) {
-      log('mkcert CA already exists', 'INFO');
+      log('✓ mkcert CA found and verified', 'INFO');
+      log('Note: CA should be installed on Docker host, not inside container', 'INFO');
       return true;
     }
 
-    log('Installing mkcert CA...', 'INFO');
-    execSync('mkcert -install', { stdio: 'inherit' });
-    log('✓ mkcert CA installed successfully', 'INFO');
-    return true;
+    log('✗ mkcert CA files not found', 'ERROR');
+    log('Expected files:', 'ERROR');
+    log(`  - ${rootCA}`, 'ERROR');
+    log(`  - ${rootCAKey}`, 'ERROR');
+    log('The CA must be installed on the Docker host machine before starting the controller', 'ERROR');
+    log('Run the install.sh script with INSTALL_CA=true to install the CA on the host', 'ERROR');
+    return false;
   } catch (error) {
-    log(`✗ Failed to install mkcert CA: ${error.message}`, 'ERROR');
+    log(`✗ Failed to verify mkcert CA: ${error.message}`, 'ERROR');
     return false;
   }
 }

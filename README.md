@@ -4,8 +4,10 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 
 ## 🚀 Características
 
+- **🌟 Instalador Unificado (NUEVO)**: Un solo comando para todo sin instalar mkcert en el host - usa Docker + comandos nativos del OS
 - **Instalación con un solo comando**: Script Bash autoinstalable que construye, instala o desinstala completamente el servicio
-- **CA instalada por defecto**: La CA de mkcert se instala automáticamente a menos que se deshabilite explícitamente
+- **CA instalada en el host**: La CA de mkcert se instala automáticamente en el host Docker (no en el contenedor) para que los navegadores confíen en los certificados
+- **Múltiples métodos de instalación**: Tradicional (con mkcert), Docker-basado, o Unificado (recomendado)
 - **Detección automática de dominios**: Monitorea eventos de Docker y labels de Traefik para detectar dominios `*.localhost` con TLS habilitado
 - **Filtrado por TLS**: Solo genera certificados para rutas que tengan TLS explícitamente habilitado
 - **Generación automática de certificados TLS**: Crea certificados válidos con mkcert sin intervención manual
@@ -14,6 +16,7 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 - **Reconciliación programada**: Verificación automática cada minuto para mantener sincronizados los certificados
 - **Configuración TLS automática**: Genera y mantiene actualizado el archivo `tls.yml` de Traefik
 - **Validación exhaustiva**: Verifica permisos, directorios, dependencias y versiones antes de cualquier operación
+- **Mínimas dependencias**: Solo Docker + herramientas nativas del sistema operativo
 - **Solo para Linux**: Optimizado específicamente para sistemas Linux
 - **Node.js LTS**: Basado en Node.js v24.13.0 LTS
 
@@ -26,10 +29,34 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 
 ## 🔧 Instalación Rápida
 
-### Opción 1: Instalación directa con curl
+### 🌟 Opción 1: Instalador Unificado (NUEVO - Recomendado)
+
+**Proceso unificado sin instalar mkcert en el host**
 
 ```bash
-# Instalación básica (CA se instala por defecto)
+# Un solo comando instala TODO:
+# 1. Genera CA usando Docker (sin mkcert en host)
+# 2. Instala CA en trust store (comandos nativos del OS)
+# 3. Configura Firefox/Chrome
+# 4. Inicia el controlador
+
+./install-unified.sh install
+```
+
+✨ **Ventajas**:
+- ✅ Sin instalar mkcert en el host
+- ✅ Un solo comando para todo
+- ✅ Mínimas dependencias (solo Docker)
+- ✅ Proceso completamente automático
+
+📖 **Documentación completa**: [INSTALL-UNIFIED.md](INSTALL-UNIFIED.md)
+
+---
+
+### Opción 2: Instalación Tradicional (instala mkcert)
+
+```bash
+# Instalación básica (instala mkcert en el host)
 curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | bash
 
 # Instalación sin CA
@@ -42,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-control
   bash
 ```
 
-### Opción 2: Descarga y ejecución local
+### Opción 3: Descarga y ejecución local
 
 ```bash
 # Descargar el script
@@ -59,6 +86,22 @@ chmod +x install.sh
 # o
 INSTALL_CA=false ./install.sh install
 ```
+
+### Opción 4: Método manual por pasos
+
+Si prefieres control total sobre cada paso:
+
+```bash
+# Ver documentación completa de métodos alternativos
+cat CA-INSTALLATION.md
+
+# O usar el script Docker por pasos
+./install-ca-docker.sh generate  # Genera CA usando Docker
+./install-ca-docker.sh install   # Instala CA en el sistema
+./install.sh install              # Instala el controlador
+```
+
+📖 **Más información**: [CA-INSTALLATION.md](CA-INSTALLATION.md) - Guía completa de métodos de instalación de CA
 
 ## 📖 Uso
 
@@ -118,11 +161,17 @@ El script realiza las siguientes validaciones antes de cualquier operación:
 
 Por defecto `INSTALL_CA=true`:
 
+- Instala mkcert en el host si no está presente (soporta múltiples distribuciones Linux)
 - Valida acceso de lectura/escritura al directorio de CA
-- Instala la CA de mkcert si no existe
-- Si ya existe, la reutiliza
+- Instala la CA de mkcert en el **host machine** (no en el contenedor) para que los navegadores confíen en los certificados
+- Si la CA ya existe, la instala en el trust store del sistema host
+- Los archivos de CA se comparten con el contenedor via volumen Docker
+
+**Importante**: La CA se instala en el sistema host (donde corre Docker y el navegador), no dentro del contenedor. Esto permite que los navegadores en tu máquina confíen en los certificados generados.
 
 Para deshabilitarla, usa `--disable-install-ca` o `INSTALL_CA=false`.
+
+**📖 Métodos alternativos de instalación**: Si prefieres no instalar mkcert en el host, consulta [CA-INSTALLATION.md](CA-INSTALLATION.md) para usar un método basado en Docker con el script `install-ca-docker.sh`.
 
 ### 3. Monitoreo y generación de certificados
 
