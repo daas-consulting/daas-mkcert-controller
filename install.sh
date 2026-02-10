@@ -353,7 +353,16 @@ generate_ca_in_docker() {
     # Build helper image
     docker build -t "$HELPER_IMAGE" -f - . << 'DOCKERFILE'
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates nss-tools mkcert
+RUN apk add --no-cache ca-certificates nss-tools \
+    && ARCH=$(uname -m) \
+    && case "$ARCH" in \
+        x86_64) MKCERT_ARCH="amd64" ;; \
+        aarch64) MKCERT_ARCH="arm64" ;; \
+        armv7l) MKCERT_ARCH="arm" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac \
+    && wget -qO /usr/local/bin/mkcert "https://github.com/FiloSottile/mkcert/releases/download/v1.4.4/mkcert-v1.4.4-linux-${MKCERT_ARCH}" \
+    && chmod +x /usr/local/bin/mkcert
 WORKDIR /work
 CMD ["/bin/sh"]
 DOCKERFILE
@@ -610,11 +619,19 @@ PACKAGE_JSON_EOF
     cat > "$work_dir/Dockerfile" << 'DOCKERFILE_EOF'
 FROM node:24.13.0-alpine
 
-# Install mkcert and required tools
+# Install required tools and mkcert binary
 RUN apk add --no-cache \
     ca-certificates \
     nss-tools \
-    mkcert
+    && ARCH=$(uname -m) \
+    && case "$ARCH" in \
+        x86_64) MKCERT_ARCH="amd64" ;; \
+        aarch64) MKCERT_ARCH="arm64" ;; \
+        armv7l) MKCERT_ARCH="arm" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac \
+    && wget -qO /usr/local/bin/mkcert "https://github.com/FiloSottile/mkcert/releases/download/v1.4.4/mkcert-v1.4.4-linux-${MKCERT_ARCH}" \
+    && chmod +x /usr/local/bin/mkcert
 
 # Create app directory
 WORKDIR /app
