@@ -383,6 +383,7 @@ verify_certificates() {
 }
 
 # Get Traefik mounted directories
+# Sets TRAEFIK_HOST_CONFIG_DIR to the host path mounted at /etc/traefik in the Traefik container
 get_traefik_volumes() {
     log_info "Detecting Traefik volume mounts..."
     
@@ -409,6 +410,16 @@ get_traefik_volumes() {
                 log_info "  - $vol"
             fi
         done
+        
+        # Extract the host path mounted at /etc/traefik in the Traefik container
+        TRAEFIK_HOST_CONFIG_DIR=$(docker inspect "$traefik_container" \
+            --format '{{range .Mounts}}{{if eq .Destination "/etc/traefik"}}{{.Source}}{{end}}{{end}}')
+        
+        if [[ -n "$TRAEFIK_HOST_CONFIG_DIR" ]]; then
+            log_info "Detected Traefik config host path: $TRAEFIK_HOST_CONFIG_DIR"
+        else
+            log_warn "Could not detect host path for /etc/traefik mount"
+        fi
     else
         log_warn "No volume mounts detected for Traefik"
     fi
@@ -1164,7 +1175,7 @@ install_controller() {
         exit 1
     fi
     
-    # Get Traefik volume mounts for information
+    # Get Traefik volume mounts and detect config host path
     get_traefik_volumes || true
     
     # Check if local image exists
@@ -1195,9 +1206,18 @@ install_controller() {
         -v "$CERTS_DIR:/certs"
     )
     
-    # Add Traefik directory if it exists
-    if [[ -d "$TRAEFIK_DIR" ]]; then
-        volume_args+=(-v "$TRAEFIK_DIR:/etc/traefik:ro")
+    # Add Traefik directory mount with write access so the controller can create certificates
+    # Use the detected host path from Traefik container if available, otherwise fall back to TRAEFIK_DIR
+    local traefik_mount_source="${TRAEFIK_HOST_CONFIG_DIR:-$TRAEFIK_DIR}"
+    if [[ -n "$traefik_mount_source" && -d "$traefik_mount_source" ]]; then
+        log_info "Mounting Traefik config directory: $traefik_mount_source -> /etc/traefik"
+        volume_args+=(-v "$traefik_mount_source:/etc/traefik")
+    elif [[ -n "$TRAEFIK_HOST_CONFIG_DIR" ]]; then
+        log_warn "Detected Traefik config path does not exist: $TRAEFIK_HOST_CONFIG_DIR"
+        if [[ -d "$TRAEFIK_DIR" ]]; then
+            log_info "Falling back to TRAEFIK_DIR: $TRAEFIK_DIR"
+            volume_args+=(-v "$TRAEFIK_DIR:/etc/traefik")
+        fi
     fi
     
     # Add CA directory if CA installation is requested
