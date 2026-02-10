@@ -58,13 +58,15 @@ function validateDirectory(dir, name) {
   try {
     const stats = fs.statSync(validated);
     if (!stats.isDirectory()) {
-      throw new Error(
+      const err = new Error(
         `Path '${validated}' for parameter '${name}' exists but is not a directory. ` +
         `Ensure '${name}' points to a valid directory path.`
       );
+      err.code = 'NOT_A_DIRECTORY';
+      throw err;
     }
   } catch (error) {
-    if (error.message.includes('is not a directory')) {
+    if (error.code === 'NOT_A_DIRECTORY') {
       throw error;
     }
     throw new Error(
@@ -74,7 +76,7 @@ function validateDirectory(dir, name) {
   }
 
   // Test read/write access
-  const testFile = path.join(validated, '.access_test');
+  const testFile = path.join(validated, `.access_test_${process.pid}`);
   try {
     fs.writeFileSync(testFile, 'test');
   } catch (error) {
