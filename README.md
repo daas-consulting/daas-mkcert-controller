@@ -4,16 +4,15 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 
 ## 🚀 Características
 
-- **🌟 Instalador Unificado (NUEVO)**: Un solo comando para todo sin instalar mkcert en el host - usa Docker + comandos nativos del OS
 - **Instalación con un solo comando**: Script Bash autoinstalable que construye, instala o desinstala completamente el servicio
 - **CA instalada en el host**: La CA de mkcert se instala automáticamente en el host Docker (no en el contenedor) para que los navegadores confíen en los certificados
-- **Múltiples métodos de instalación**: Tradicional (con mkcert), Docker-basado, o Unificado (recomendado)
-- **Detección automática de dominios**: Monitorea eventos de Docker y labels de Traefik para detectar dominios `*.localhost` con TLS habilitado
-- **Filtrado por TLS**: Solo genera certificados para rutas que tengan TLS explícitamente habilitado
-- **Generación automática de certificados TLS**: Crea certificados válidos con mkcert sin intervención manual
-- **Sincronización en caliente**: Monitorea archivos dinámicos de Traefik para mantener la configuración actualizada
-- **Control de eventos (throttling)**: Procesa eventos con un throttle configurable (default 300ms) para evitar sobrecarga
-- **Reconciliación programada**: Verificación automática cada minuto para mantener sincronizados los certificados
+- **Único método de instalación**: Unificado todo en uno
+- **Detección automática de dominios**: Monitorea eventos de Docker y labels de Traefik para detectar dominios `*.localhost` con TLS habilitado desde un contenedor
+- **Filtrado por TLS**: Solo genera certificados para rutas que tengan TLS explícitamente habilitado desde un contenedor
+- **Generación automática de certificados TLS**: Crea certificados válidos con mkcert sin intervención manual desde un contenedor
+- **Sincronización en caliente**: Monitorea archivos dinámicos de Traefik para mantener la configuración actualizada desde un contenedor
+- **Control de eventos (throttling)**: Procesa eventos con un throttle configurable (default 300ms) para evitar sobrecarga desde un contenedor
+- **Reconciliación programada**: Verificación automática cada minuto para mantener sincronizados los certificados desde un contenedor
 - **Configuración TLS automática**: Genera y mantiene actualizado el archivo `tls.yml` de Traefik
 - **Validación exhaustiva**: Verifica permisos, directorios, dependencias y versiones antes de cualquier operación
 - **Mínimas dependencias**: Solo Docker + herramientas nativas del sistema operativo
@@ -27,55 +26,33 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 - **Traefik**: Debe estar corriendo antes de iniciar el controller
 - **Permisos**: Acceso de lectura/escritura al socket de Docker y directorios de configuración
 
-## 🔧 Instalación Rápida
+### No requiere
 
-### 🌟 Opción 1: Instalador Unificado (NUEVO - Recomendado)
+- ❌ mkcert en el host
+- ❌ Go
+- ❌ Compiladores
+- ❌ Herramientas adicionales
 
-**Proceso unificado sin instalar mkcert en el host**
+## 🔧 Instalación
+
+### Instalación con un solo comando (curl)
 
 ```bash
 # Un solo comando instala TODO:
 # 1. Genera CA usando Docker (sin mkcert en host)
 # 2. Instala CA en trust store (comandos nativos del OS)
 # 3. Configura Firefox/Chrome
-# 4. Inicia el controlador
+# 4. Construye la imagen Docker
+# 5. Inicia el controlador
 
-./install-unified.sh install
-```
-
-✨ **Ventajas**:
-- ✅ Sin instalar mkcert en el host
-- ✅ Un solo comando para todo
-- ✅ Mínimas dependencias (solo Docker)
-- ✅ Proceso completamente automático
-
-📖 **Documentación completa**: [INSTALL-UNIFIED.md](INSTALL-UNIFIED.md)
-
----
-
-### Opción 2: Instalación Tradicional (instala mkcert)
-
-```bash
-# Instalación básica (instala mkcert en el host)
 curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | bash
-
-# Instalación sin CA
-curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | INSTALL_CA=false bash
-
-# Instalación con directorios personalizados
-curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | \
-  TRAEFIK_DIR=/custom/traefik \
-  CERTS_DIR=/custom/certs \
-  bash
 ```
 
-### Opción 3: Descarga y ejecución local
+### Descarga y ejecución local
 
 ```bash
 # Descargar el script
 wget https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh
-
-# Hacer ejecutable
 chmod +x install.sh
 
 # Instalar (CA por defecto)
@@ -85,23 +62,10 @@ chmod +x install.sh
 ./install.sh install --disable-install-ca
 # o
 INSTALL_CA=false ./install.sh install
+
+# Instalación con directorios personalizados
+TRAEFIK_DIR=/custom/traefik CERTS_DIR=/custom/certs ./install.sh install
 ```
-
-### Opción 4: Método manual por pasos
-
-Si prefieres control total sobre cada paso:
-
-```bash
-# Ver documentación completa de métodos alternativos
-cat CA-INSTALLATION.md
-
-# O usar el script Docker por pasos
-./install-ca-docker.sh generate  # Genera CA usando Docker
-./install-ca-docker.sh install   # Instala CA en el sistema
-./install.sh install              # Instala el controlador
-```
-
-📖 **Más información**: [CA-INSTALLATION.md](CA-INSTALLATION.md) - Guía completa de métodos de instalación de CA
 
 ## 📖 Uso
 
@@ -141,6 +105,15 @@ cat CA-INSTALLATION.md
 | `THROTTLE_MS` | Tiempo de throttle para eventos (ms) | `300` |
 | `SCHEDULED_INTERVAL_MS` | Intervalo de reconciliación programada (ms) | `60000` (1 minuto) |
 
+### Opciones de línea de comandos
+
+| Opción | Descripción |
+|--------|-------------|
+| `--install-ca=VALUE` | Establece la instalación de CA (true/false/yes/no/si/no/1/0) |
+| `--disable-install-ca` | Desactiva la instalación automática de CA (alias de `--install-ca=false`) |
+
+**Prioridad**: Argumentos de línea de comandos > Variables de entorno > Valores por defecto
+
 ## 🔍 Funcionamiento
 
 ### 1. Validaciones previas
@@ -153,29 +126,27 @@ El script realiza las siguientes validaciones antes de cualquier operación:
 - ✅ Valida acceso de lectura/escritura a directorios necesarios
 - ✅ Verifica variables de entorno requeridas
 - ✅ Confirma que Traefik está corriendo
-- ✅ Verifica dependencias locales (curl, etc.)
-- ✅ Comprueba existencia y versión de la imagen local
 - ✅ Verifica instalación de certificados y CA
 
 ### 2. Instalación de CA (por defecto activada)
 
 Por defecto `INSTALL_CA=true`:
 
-- Instala mkcert en el host si no está presente (soporta múltiples distribuciones Linux)
-- Valida acceso de lectura/escritura al directorio de CA
-- Instala la CA de mkcert en el **host machine** (no en el contenedor) para que los navegadores confíen en los certificados
-- Si la CA ya existe, la instala en el trust store del sistema host
-- Los archivos de CA se comparten con el contenedor via volumen Docker
+- Genera los archivos de CA usando un contenedor Docker temporal con mkcert (no se instala mkcert en el host)
+- Instala la CA en el trust store del sistema usando comandos nativos del OS:
+  - **Debian/Ubuntu**: `update-ca-certificates`
+  - **Fedora/RHEL**: `update-ca-trust`
+  - **Arch**: `trust extract-compat`
+- Configura Firefox y Chrome NSS databases si están instalados
+- Los archivos de CA se comparten con el contenedor del controller via volumen Docker
 
 **Importante**: La CA se instala en el sistema host (donde corre Docker y el navegador), no dentro del contenedor. Esto permite que los navegadores en tu máquina confíen en los certificados generados.
 
 Para deshabilitarla, usa `--disable-install-ca` o `INSTALL_CA=false`.
 
-**📖 Métodos alternativos de instalación**: Si prefieres no instalar mkcert en el host, consulta [CA-INSTALLATION.md](CA-INSTALLATION.md) para usar un método basado en Docker con el script `install-ca-docker.sh`.
-
 ### 3. Monitoreo y generación de certificados
 
-El controller realiza las siguientes tareas:
+El controller realiza las siguientes tareas desde un contenedor:
 
 1. **Escaneo inicial**: Busca dominios `*.localhost` con TLS habilitado en contenedores existentes
 2. **Monitoreo de eventos Docker**: Detecta nuevos contenedores y cambios con throttling (default 300ms)
@@ -222,13 +193,19 @@ Este archivo se actualiza automáticamente cada vez que se detectan cambios en l
 
 ```
 daas-mkcert-controller/
-├── install.sh          # Script de instalación autocontenido
-├── package.json        # Dependencias Node.js
-├── index.js           # Aplicación principal del controller
-├── Dockerfile         # Imagen Docker con Node.js y mkcert
-├── .dockerignore      # Archivos excluidos del build
-├── .gitignore         # Archivos excluidos del repositorio
-└── README.md          # Esta documentación
+├── install.sh              # Script de instalación autocontenido
+├── package.json            # Dependencias Node.js
+├── index.js                # Aplicación principal del controller
+├── banner.js               # Banner ASCII con colores
+├── parseBool.js            # Utilidad de parseo de booleanos
+├── parseBool.test.js       # Tests para parseBool
+├── validateConfig.js       # Validación de configuración y directorios
+├── validateConfig.test.js  # Tests para validateConfig
+├── Dockerfile              # Imagen Docker con Node.js y mkcert
+├── .dockerignore           # Archivos excluidos del build
+├── .gitignore              # Archivos excluidos del repositorio
+├── LICENSE                 # Licencia MIT
+└── README.md               # Esta documentación
 ```
 
 ## 🔐 Seguridad y permisos
@@ -239,6 +216,28 @@ daas-mkcert-controller/
 - **Directorio de certificados**: Lectura/escritura en `CERTS_DIR`
 - **Directorio de Traefik**: Lectura de configuración dinámica
 - **Directorio de CA**: Lectura/escritura (solo si `INSTALL_CA=true`)
+
+### Cómo funciona la instalación de CA sin mkcert en el host
+
+El script usa **comandos nativos del sistema operativo**:
+
+**Debian/Ubuntu:**
+```bash
+sudo cp rootCA.pem /usr/local/share/ca-certificates/mkcert-rootCA.crt
+sudo update-ca-certificates
+```
+
+**Fedora/RHEL:**
+```bash
+sudo cp rootCA.pem /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt
+sudo update-ca-trust
+```
+
+**Arch:**
+```bash
+sudo cp rootCA.pem /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt
+sudo trust extract-compat
+```
 
 ### Recomendaciones
 
@@ -308,6 +307,45 @@ daas-mkcert-controller/
    ls -ld $CERTS_DIR $TRAEFIK_DIR
    ```
 
+### Error: "Docker daemon is not running"
+
+```bash
+# Verificar que Docker está corriendo
+sudo systemctl status docker
+
+# Iniciar Docker
+sudo systemctl start docker
+```
+
+### Error: "No read access to Docker socket"
+
+```bash
+# Añadir usuario al grupo docker
+sudo usermod -aG docker $USER
+
+# Cerrar sesión y volver a entrar, o:
+newgrp docker
+```
+
+### Error: "Could not install CA in system"
+
+Esto es normal si no tienes sudo o lo declinaste. La CA se generó correctamente, pero no se instaló en el trust store del sistema.
+
+```bash
+# Instalar manualmente con sudo
+sudo cp ~/.local/share/mkcert/rootCA.pem /usr/local/share/ca-certificates/mkcert-rootCA.crt
+sudo update-ca-certificates
+```
+
+### Los certificados no funcionan en el navegador
+
+1. **Reinicia el navegador** después de la instalación
+2. Verifica que la CA esté instalada:
+   ```bash
+   ./install.sh status
+   ```
+3. En Firefox: ir a `about:preferences#privacy` → "Certificates" → "View Certificates" → "Authorities" → buscar "mkcert CA"
+
 ### Throttling y reconciliación
 
 El sistema procesa eventos con throttling para evitar sobrecarga:
@@ -324,19 +362,21 @@ El sistema procesa eventos con throttling para evitar sobrecarga:
 docker ps | grep traefik
 
 # 2. Instalar el controller (CA se instala por defecto)
-curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | bash
+./install.sh install
 
 # 3. Verificar estado
-docker logs -f daas-mkcert-controller
+./install.sh status
+
+# 4. Ver logs
+./install.sh logs
 ```
 
-### Ejemplo 2: Instalación con CA personalizada
+### Ejemplo 2: Instalación con directorios personalizados
 
 ```bash
-# Instalar con CA en directorio personalizado
-INSTALL_CA=true \
-MKCERT_CA_DIR=/custom/ca \
+TRAEFIK_DIR=/custom/traefik \
 CERTS_DIR=/custom/certs \
+MKCERT_CA_DIR=/custom/ca \
 ./install.sh install
 ```
 
@@ -356,23 +396,68 @@ services:
 Cuando este contenedor se inicie, el controller automáticamente:
 1. Detectará el dominio `myapp.localhost`
 2. Generará certificados en `$CERTS_DIR/myapp.localhost.pem` y `myapp.localhost-key.pem`
+3. Actualizará la configuración TLS de Traefik
+
+### Ejemplo 4: Múltiples dominios
+
+```yaml
+labels:
+  - "traefik.http.routers.multi.rule=Host(`app1.localhost`) || Host(`app2.localhost`)"
+  - "traefik.http.routers.multi.tls=true"
+```
+
+### Ejemplo 5: Verificación rápida
+
+```bash
+# 1. Estado del controller
+./install.sh status
+
+# 2. Logs recientes
+docker logs --tail 50 daas-mkcert-controller
+
+# 3. Certificados generados
+ls -lh ~/.daas-mkcert/certs/
+
+# 4. Traefik corriendo
+docker ps | grep traefik
+```
 
 ## 🗑️ Desinstalación
 
 ```bash
 # Desinstalar completamente
 ./install.sh uninstall
-
-# El script preguntará si desea:
-# - Eliminar la imagen Docker
-# - Eliminar certificados generados
 ```
 
-La desinstalación:
+El script preguntará interactivamente:
 - ✅ Detiene y elimina el contenedor
-- ✅ Opcionalmente elimina la imagen Docker
-- ✅ Opcionalmente elimina certificados generados
-- ✅ NO elimina la CA de mkcert (para preservar confianza del sistema)
+- ❓ ¿Eliminar la imagen Docker?
+- ❓ ¿Eliminar la imagen helper?
+- ❓ ¿Eliminar la CA del trust store del sistema?
+- ❓ ¿Eliminar archivos de CA?
+- ❓ ¿Eliminar certificados generados?
+
+## 🧪 Testing
+
+### Ejecutar tests unitarios
+
+```bash
+npm test
+# Ejecuta: node parseBool.test.js && node validateConfig.test.js
+```
+
+### Tests manuales
+
+```bash
+# Test de ayuda
+./install.sh help
+
+# Test de estado
+./install.sh status
+
+# Test de validación de variables
+INSTALL_CA=true ./install.sh help
+```
 
 ## 🤝 Contribuir
 
