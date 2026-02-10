@@ -33,27 +33,48 @@ MKCERT_CA_DIR="${MKCERT_CA_DIR:-$HOME/.local/share/mkcert}"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+GRAY='\033[0;90m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Logging functions
+# Syslog RFC 5424 facility: local0 (16)
+_SYSLOG_FACILITY=16
+_APP_NAME="daas-mkcert-controller"
+_HOSTNAME=$(hostname)
+
+# Syslog RFC 5424 log function
+# Usage: _syslog_log <severity_num> <level_label> <color> <message>
+_syslog_log() {
+    local severity="$1"
+    local level="$2"
+    local color="$3"
+    local message="$4"
+    local priority=$(( _SYSLOG_FACILITY * 8 + severity ))
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+    local header="<${priority}>1 ${timestamp} ${_HOSTNAME} ${_APP_NAME} $$ - -"
+    echo -e "${GRAY}${header}${NC} ${color}[${level}]${NC} ${color}${message}${NC}"
+}
+
+# Logging functions - Syslog RFC 5424 format with colors
 log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+    _syslog_log 6 "INFO" "${GREEN}" "$1"
 }
 
 log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+    _syslog_log 4 "WARN" "${YELLOW}" "$1"
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    _syslog_log 3 "ERROR" "${RED}" "$1"
 }
 
 log_success() {
-    echo -e "${GREEN}[✓]${NC} $1"
+    _syslog_log 6 "INFO" "${GREEN}" "✓ $1"
 }
 
 log_fail() {
-    echo -e "${RED}[✗]${NC} $1"
+    _syslog_log 3 "ERROR" "${RED}" "✗ $1"
 }
 
 # Display banner with daas ASCII logo
