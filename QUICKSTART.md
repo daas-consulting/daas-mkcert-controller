@@ -32,8 +32,8 @@ chmod +x install.sh
 | `CONTAINER_NAME` | `daas-mkcert-controller` | Container name |
 | `IMAGE_NAME` | `daas-mkcert-controller:latest` | Docker image name |
 | `INSTALL_CA` | `false` | Install mkcert CA |
-| `TRAEFIK_DIR` | `/etc/traefik` | Traefik config directory |
-| `CERTS_DIR` | `/var/lib/daas-mkcert/certs` | Certificates directory |
+| `TRAEFIK_DIR` | `/etc/traefik` (root) · `~/.traefik` (non-root) | Traefik config directory |
+| `CERTS_DIR` | `/var/lib/daas-mkcert/certs` (root) · `~/.daas-mkcert/certs` (non-root) | Certificates directory |
 | `MKCERT_CA_DIR` | `~/.local/share/mkcert` | mkcert CA directory |
 
 ## Examples
