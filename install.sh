@@ -47,14 +47,41 @@ log_fail() {
     echo -e "${RED}[✗]${NC} $1"
 }
 
-# Display banner
+# Display banner with daas ASCII logo
 show_banner() {
-    cat << "EOF"
-╔═══════════════════════════════════════════════════════════╗
-║       daas-mkcert-controller Installation Script         ║
-║   Automatic TLS certificate generation for Traefik       ║
-╚═══════════════════════════════════════════════════════════╝
-EOF
+    local TOTAL_WIDTH=34
+    local PRODUCT="mkcert-controller"
+    local COMPANY="consulting"
+    local BRAND="daas"
+    local BLUE_BG='\033[44;37m'
+    local PURPLE_BG='\033[45;37m'
+    local RST='\033[0m'
+
+    # Top bar (blue background, white text)
+    local top_left=" ${BRAND}"
+    local top_right="${PRODUCT} "
+    local top_pad=$(( TOTAL_WIDTH - ${#top_left} - ${#top_right} ))
+    printf "${BLUE_BG}${top_left}%${top_pad}s${top_right}${RST}\n" ""
+
+    # Figlet "daas" graffiti with lolcat-style rainbow colors
+    printf '\e[38;5;118m \e[39m\e[38;5;118m \e[39m\e[38;5;118m \e[39m\e[38;5;118m \e[39m\e[38;5;154m \e[39m\e[38;5;154m \e[39m\e[38;5;154m \e[39m\e[38;5;154m.\e[39m\e[38;5;148m_\e[39m\e[38;5;148m_\e[39m\e[38;5;148m_\e[39m\e[38;5;148m \e[39m\e[38;5;184m \e[39m\e[38;5;184m \e[39m\e[38;5;184m \e[39m\e[38;5;184m \e[39m\e[38;5;178m \e[39m\e[38;5;178m \e[39m\e[38;5;178m \e[39m\e[38;5;214m \e[39m\e[38;5;214m \e[39m\e[38;5;214m \e[39m\e[38;5;214m \e[39m\e[38;5;208m \e[39m\e[38;5;208m \e[39m\e[38;5;208m \e[39m\e[38;5;208m \e[39m\e[38;5;209m \e[39m\e[38;5;209m \e[39m\e[38;5;209m \e[39m\e[38;5;209m \e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\n'
+    printf '\e[38;5;118m \e[39m\e[38;5;118m \e[39m\e[38;5;154m \e[39m\e[38;5;154m \e[39m\e[38;5;154m \e[39m\e[38;5;154m_\e[39m\e[38;5;148m_\e[39m\e[38;5;148m|\e[39m\e[38;5;148m \e[39m\e[38;5;148m_\e[39m\e[38;5;184m/\e[39m\e[38;5;184m_\e[39m\e[38;5;184m_\e[39m\e[38;5;184m_\e[39m\e[38;5;178m_\e[39m\e[38;5;178m \e[39m\e[38;5;178m \e[39m\e[38;5;214m_\e[39m\e[38;5;214m_\e[39m\e[38;5;214m_\e[39m\e[38;5;214m_\e[39m\e[38;5;208m_\e[39m\e[38;5;208m \e[39m\e[38;5;208m \e[39m\e[38;5;208m \e[39m\e[38;5;209m \e[39m\e[38;5;209m_\e[39m\e[38;5;209m_\e[39m\e[38;5;209m_\e[39m\e[38;5;203m_\e[39m\e[38;5;203m_\e[39m\e[38;5;203m_\e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\n'
+    printf '\e[38;5;154m \e[39m\e[38;5;154m \e[39m\e[38;5;154m \e[39m\e[38;5;154m \e[39m\e[38;5;148m/\e[39m\e[38;5;148m \e[39m\e[38;5;148m_\e[39m\e[38;5;148m_\e[39m\e[38;5;184m \e[39m\e[38;5;184m|\e[39m\e[38;5;184m\\\e[39m\e[38;5;184m_\e[39m\e[38;5;178m_\e[39m\e[38;5;178m \e[39m\e[38;5;178m \e[39m\e[38;5;214m\\\e[39m\e[38;5;214m \e[39m\e[38;5;214m\\\e[39m\e[38;5;214m_\e[39m\e[38;5;208m_\e[39m\e[38;5;208m \e[39m\e[38;5;208m \e[39m\e[38;5;208m\\\e[39m\e[38;5;209m \e[39m\e[38;5;209m \e[39m\e[38;5;209m/\e[39m\e[38;5;209m \e[39m\e[38;5;203m \e[39m\e[38;5;203m_\e[39m\e[38;5;203m_\e[39m\e[38;5;203m_\e[39m\e[38;5;203m/\e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\n'
+    printf '\e[38;5;154m \e[39m\e[38;5;154m \e[39m\e[38;5;148m \e[39m\e[38;5;148m/\e[39m\e[38;5;148m \e[39m\e[38;5;148m/\e[39m\e[38;5;184m_\e[39m\e[38;5;184m/\e[39m\e[38;5;184m \e[39m\e[38;5;184m|\e[39m\e[38;5;178m \e[39m\e[38;5;178m/\e[39m\e[38;5;178m \e[39m\e[38;5;214m_\e[39m\e[38;5;214m_\e[39m\e[38;5;214m \e[39m\e[38;5;214m\\\e[39m\e[38;5;208m_\e[39m\e[38;5;208m/\e[39m\e[38;5;208m \e[39m\e[38;5;208m_\e[39m\e[38;5;209m_\e[39m\e[38;5;209m \e[39m\e[38;5;209m\\\e[39m\e[38;5;209m_\e[39m\e[38;5;203m\\\e[39m\e[38;5;203m_\e[39m\e[38;5;203m_\e[39m\e[38;5;203m_\e[39m\e[38;5;203m \e[39m\e[38;5;203m\\\e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\n'
+    printf '\e[38;5;148m \e[39m\e[38;5;148m \e[39m\e[38;5;148m \e[39m\e[38;5;148m\\\e[39m\e[38;5;184m_\e[39m\e[38;5;184m_\e[39m\e[38;5;184m_\e[39m\e[38;5;184m_\e[39m\e[38;5;178m \e[39m\e[38;5;178m|\e[39m\e[38;5;178m(\e[39m\e[38;5;214m_\e[39m\e[38;5;214m_\e[39m\e[38;5;214m_\e[39m\e[38;5;214m_\e[39m\e[38;5;208m \e[39m\e[38;5;208m \e[39m\e[38;5;208m(\e[39m\e[38;5;208m_\e[39m\e[38;5;209m_\e[39m\e[38;5;209m_\e[39m\e[38;5;209m_\e[39m\e[38;5;209m \e[39m\e[38;5;203m \e[39m\e[38;5;203m/\e[39m\e[38;5;203m_\e[39m\e[38;5;203m_\e[39m\e[38;5;203m_\e[39m\e[38;5;203m_\e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\e[38;5;203m>\e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\n'
+    printf '\e[38;5;148m \e[39m\e[38;5;148m \e[39m\e[38;5;184m \e[39m\e[38;5;184m \e[39m\e[38;5;184m \e[39m\e[38;5;184m \e[39m\e[38;5;178m \e[39m\e[38;5;178m \e[39m\e[38;5;178m\\\e[39m\e[38;5;214m/\e[39m\e[38;5;214m \e[39m\e[38;5;214m \e[39m\e[38;5;214m \e[39m\e[38;5;208m \e[39m\e[38;5;208m \e[39m\e[38;5;208m\\\e[39m\e[38;5;208m/\e[39m\e[38;5;209m \e[39m\e[38;5;209m \e[39m\e[38;5;209m \e[39m\e[38;5;209m \e[39m\e[38;5;203m \e[39m\e[38;5;203m\\\e[39m\e[38;5;203m/\e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\e[38;5;203m\\\e[39m\e[38;5;203m/\e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\e[38;5;203m \e[39m\n'
+
+    # Bottom bar (blue background, white text)
+    local bot_left=" ${PRODUCT}"
+    local bot_right="${COMPANY} "
+    local bot_pad=$(( TOTAL_WIDTH - ${#bot_left} - ${#bot_right} ))
+    printf "${BLUE_BG}${bot_left}%${bot_pad}s${bot_right}${RST}\n" ""
+
+    # Version bar (purple background, white text)
+    local ver_right="v${VERSION} "
+    local ver_pad=$(( TOTAL_WIDTH - ${#ver_right} ))
+    printf "${PURPLE_BG}%${ver_pad}s${ver_right}${RST}\n" ""
+
     echo ""
 }
 
