@@ -5,11 +5,17 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 ## 🚀 Características
 
 - **Instalación con un solo comando**: Script Bash autoinstalable que construye, instala o desinstala completamente el servicio
-- **Detección automática de dominios**: Monitorea eventos de Docker y labels de Traefik para detectar dominios `*.localhost`
+- **CA instalada por defecto**: La CA de mkcert se instala automáticamente a menos que se deshabilite explícitamente
+- **Detección automática de dominios**: Monitorea eventos de Docker y labels de Traefik para detectar dominios `*.localhost` con TLS habilitado
+- **Filtrado por TLS**: Solo genera certificados para rutas que tengan TLS explícitamente habilitado
 - **Generación automática de certificados TLS**: Crea certificados válidos con mkcert sin intervención manual
 - **Sincronización en caliente**: Monitorea archivos dinámicos de Traefik para mantener la configuración actualizada
-- **Validación exhaustiva**: Verifica permisos, directorios y variables de entorno antes de cualquier operación
+- **Control de eventos (throttling)**: Procesa eventos con un throttle configurable (default 300ms) para evitar sobrecarga
+- **Reconciliación programada**: Verificación automática cada minuto para mantener sincronizados los certificados
+- **Configuración TLS automática**: Genera y mantiene actualizado el archivo `tls.yml` de Traefik
+- **Validación exhaustiva**: Verifica permisos, directorios, dependencias y versiones antes de cualquier operación
 - **Solo para Linux**: Optimizado específicamente para sistemas Linux
+- **Node.js LTS**: Basado en Node.js v24.13.0 LTS
 
 ## 📋 Requisitos
 
@@ -23,17 +29,16 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 ### Opción 1: Instalación directa con curl
 
 ```bash
-# Instalación básica
+# Instalación básica (CA se instala por defecto)
 curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | bash
 
-# Instalación con CA de mkcert
-curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | INSTALL_CA=true bash
+# Instalación sin CA
+curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | INSTALL_CA=false bash
 
 # Instalación con directorios personalizados
 curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | \
   TRAEFIK_DIR=/custom/traefik \
   CERTS_DIR=/custom/certs \
-  INSTALL_CA=true \
   bash
 ```
 
@@ -46,11 +51,13 @@ wget https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/ma
 # Hacer ejecutable
 chmod +x install.sh
 
-# Instalar
+# Instalar (CA por defecto)
 ./install.sh install
 
-# Instalar con CA
-INSTALL_CA=true ./install.sh install
+# Instalar sin CA
+./install.sh install --disable-install-ca
+# o
+INSTALL_CA=false ./install.sh install
 ```
 
 ## 📖 Uso
@@ -58,8 +65,11 @@ INSTALL_CA=true ./install.sh install
 ### Comandos disponibles
 
 ```bash
-# Instalar el servicio
+# Instalar el servicio (CA se instala por defecto)
 ./install.sh install
+
+# Instalar sin CA
+./install.sh install --disable-install-ca
 
 # Desinstalar el servicio
 ./install.sh uninstall
@@ -79,11 +89,14 @@ INSTALL_CA=true ./install.sh install
 | Variable | Descripción | Valor por defecto |
 |----------|-------------|-------------------|
 | `CONTAINER_NAME` | Nombre del contenedor | `daas-mkcert-controller` |
-| `IMAGE_NAME` | Nombre de la imagen Docker | `daas-mkcert-controller:latest` |
-| `INSTALL_CA` | Instalar CA de mkcert (`true`/`false`) | `false` |
+| `IMAGE_NAME` | Nombre de la imagen Docker | `daas-mkcert-controller` |
+| `IMAGE_TAG` | Tag de la imagen Docker | `latest` |
+| `INSTALL_CA` | Instalar CA de mkcert (`true`/`false`) | `true` |
 | `TRAEFIK_DIR` | Directorio de configuración de Traefik | `/etc/traefik` |
 | `CERTS_DIR` | Directorio para almacenar certificados | `/var/lib/daas-mkcert/certs` |
 | `MKCERT_CA_DIR` | Directorio de la CA de mkcert | `~/.local/share/mkcert` |
+| `THROTTLE_MS` | Tiempo de throttle para eventos (ms) | `300` |
+| `SCHEDULED_INTERVAL_MS` | Intervalo de reconciliación programada (ms) | `60000` (1 minuto) |
 
 ## 🔍 Funcionamiento
 
@@ -97,35 +110,64 @@ El script realiza las siguientes validaciones antes de cualquier operación:
 - ✅ Valida acceso de lectura/escritura a directorios necesarios
 - ✅ Verifica variables de entorno requeridas
 - ✅ Confirma que Traefik está corriendo
+- ✅ Verifica dependencias locales (curl, etc.)
+- ✅ Comprueba existencia y versión de la imagen local
+- ✅ Verifica instalación de certificados y CA
 
-### 2. Instalación de CA (opcional)
+### 2. Instalación de CA (por defecto activada)
 
-Si `INSTALL_CA=true`:
+Por defecto `INSTALL_CA=true`:
 
 - Valida acceso de lectura/escritura al directorio de CA
 - Instala la CA de mkcert si no existe
 - Si ya existe, la reutiliza
 
+Para deshabilitarla, usa `--disable-install-ca` o `INSTALL_CA=false`.
+
 ### 3. Monitoreo y generación de certificados
 
 El controller realiza las siguientes tareas:
 
-1. **Escaneo inicial**: Busca dominios `*.localhost` en contenedores existentes
-2. **Monitoreo de eventos Docker**: Detecta nuevos contenedores con labels de Traefik
+1. **Escaneo inicial**: Busca dominios `*.localhost` con TLS habilitado en contenedores existentes
+2. **Monitoreo de eventos Docker**: Detecta nuevos contenedores y cambios con throttling (default 300ms)
 3. **Monitoreo de archivos Traefik**: Vigila cambios en configuración dinámica
-4. **Generación automática**: Crea certificados TLS para dominios detectados
+4. **Reconciliación programada**: Verifica y sincroniza certificados cada minuto
+5. **Generación automática**: Crea certificados TLS solo para dominios con TLS habilitado
+6. **Actualización de configuración**: Genera automáticamente el archivo `tls.yml` para Traefik
 
-### 4. Detección de dominios
+### 4. Detección de dominios (solo con TLS habilitado)
 
-El controller detecta dominios en:
+El controller detecta dominios en labels de Docker que cumplan **ambas** condiciones:
 
-- **Labels de Docker**: Lee labels de Traefik en contenedores (ej: `traefik.http.routers.*.rule`)
-- **Archivos de Traefik**: Parsea archivos YAML/JSON en el directorio dinámico de Traefik
+1. **Label de regla**: `traefik.http.routers.<name>.rule` con `Host(\`*.localhost\`)`
+2. **Label de TLS**: `traefik.http.routers.<name>.tls=true`
 
-Ejemplo de label detectada:
+**Importante**: Solo se generan certificados para rutas que tienen TLS explícitamente habilitado.
+
+Ejemplo de labels correctas:
 ```yaml
-traefik.http.routers.myapp.rule: "Host(`myapp.localhost`)"
+labels:
+  - "traefik.enable=true"
+  - "traefik.http.routers.myapp.rule=Host(`myapp.localhost`)"
+  - "traefik.http.routers.myapp.tls=true"  # ← Requerido para generar certificado
 ```
+
+### 5. Archivo de configuración TLS
+
+El controller genera automáticamente el archivo `/etc/traefik/dynamic/tls.yml` con la configuración de todos los certificados:
+
+```yaml
+# Auto-generated by daas-mkcert-controller
+# Do not edit manually
+tls:
+  certificates:
+    - certFile: /certs/myapp.localhost.pem
+      keyFile: /certs/myapp.localhost-key.pem
+    - certFile: /certs/api.localhost.pem
+      keyFile: /certs/api.localhost-key.pem
+```
+
+Este archivo se actualiza automáticamente cada vez que se detectan cambios en los contenedores o en la configuración de Traefik.
 
 ## 📂 Estructura del proyecto
 
@@ -192,9 +234,15 @@ daas-mkcert-controller/
    docker inspect <container> | grep traefik
    ```
 
-2. Comprobar que los dominios terminan en `.localhost`
+2. Verificar que las rutas tienen TLS habilitado:
+   ```bash
+   docker inspect <container> | grep -A 2 "traefik.http.routers"
+   # Debe tener: traefik.http.routers.<name>.tls=true
+   ```
 
-3. Revisar logs para errores de mkcert:
+3. Comprobar que los dominios terminan en `.localhost`
+
+4. Revisar logs para errores de mkcert:
    ```bash
    docker logs -f daas-mkcert-controller
    ```
@@ -211,6 +259,13 @@ daas-mkcert-controller/
    ls -ld $CERTS_DIR $TRAEFIK_DIR
    ```
 
+### Throttling y reconciliación
+
+El sistema procesa eventos con throttling para evitar sobrecarga:
+- **Throttling de eventos**: Máximo una reconciliación cada 300ms (configurable con `THROTTLE_MS`)
+- **Reconciliación programada**: Se ejecuta cada 60 segundos (configurable con `SCHEDULED_INTERVAL_MS`)
+- Si ya hay una reconciliación en curso, las nuevas se omiten
+
 ## 📝 Ejemplos de uso
 
 ### Ejemplo 1: Instalación básica
@@ -219,7 +274,7 @@ daas-mkcert-controller/
 # 1. Asegurar que Traefik está corriendo
 docker ps | grep traefik
 
-# 2. Instalar el controller
+# 2. Instalar el controller (CA se instala por defecto)
 curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | bash
 
 # 3. Verificar estado
