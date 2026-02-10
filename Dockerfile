@@ -16,7 +16,7 @@ COPY package*.json ./
 RUN npm install --production
 
 # Copy application code
-COPY index.js banner.js parseBool.js ./
+COPY index.js banner.js parseBool.js validateConfig.js ./
 
 # Create directories for certificates
 RUN mkdir -p /certs

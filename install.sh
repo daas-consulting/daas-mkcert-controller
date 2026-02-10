@@ -53,7 +53,7 @@ _syslog_log() {
     local timestamp
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")
     local header="<${priority}>1 ${timestamp} ${_HOSTNAME} ${_APP_NAME} $$ - -"
-    echo -e "${GRAY}${header}${NC} ${color}[${level}]${NC} ${color}${message}${NC}"
+    echo -e "${header} ${color}[${level}]${NC} ${color}${message}${NC}"
 }
 
 # Logging functions - Syslog RFC 5424 format with colors
@@ -488,7 +488,7 @@ COPY package*.json ./
 RUN npm install --production
 
 # Copy application code
-COPY index.js banner.js parseBool.js ./
+COPY index.js banner.js parseBool.js validateConfig.js ./
 
 # Create directories for certificates
 RUN mkdir -p /certs
@@ -512,12 +512,13 @@ const path = require('path');
 const os = require('os');
 const { printBanner, isBannerShown } = require('./banner');
 const { parseBool } = require('./parseBool');
+const { validateNotEmpty, validateDirectory } = require('./validateConfig');
 
 // Configuration from environment variables
 const INSTALL_CA = parseBool(process.env.INSTALL_CA, true, 'INSTALL_CA');
-const TRAEFIK_DIR = process.env.TRAEFIK_DIR || '/etc/traefik';
-const CERTS_DIR = process.env.CERTS_DIR || '/certs';
-const MKCERT_CA_DIR = process.env.MKCERT_CA_DIR || '/root/.local/share/mkcert';
+const TRAEFIK_DIR = validateNotEmpty(process.env.TRAEFIK_DIR || '/etc/traefik', 'TRAEFIK_DIR');
+const CERTS_DIR = validateNotEmpty(process.env.CERTS_DIR || '/certs', 'CERTS_DIR');
+const MKCERT_CA_DIR = validateNotEmpty(process.env.MKCERT_CA_DIR || '/root/.local/share/mkcert', 'MKCERT_CA_DIR');
 const THROTTLE_MS = parseInt(process.env.THROTTLE_MS || '300', 10);
 const SCHEDULED_INTERVAL_MS = parseInt(process.env.SCHEDULED_INTERVAL_MS || '60000', 10); // 1 minute
 
@@ -583,26 +584,17 @@ function log(message, level = 'INFO') {
   const header = `<${priority}>1 ${timestamp} ${HOSTNAME} ${APP_NAME} ${procId} - -`;
   const levelTag = `[${level}]`;
 
-  console.log(`${GRAY}${header}${RESET} ${color}${levelTag}${RESET} ${color}${message}${RESET}`);
+  console.log(`${header} ${color}${levelTag}${RESET} ${color}${message}${RESET}`);
 }
 
 // Validate read/write access to a directory
 function validateAccess(dir, description) {
   try {
-    if (!fs.existsSync(dir)) {
-      log(`Creating directory: ${dir}`, 'INFO');
-      fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
-    }
-    
-    // Test write access
-    const testFile = path.join(dir, '.access_test');
-    fs.writeFileSync(testFile, 'test');
-    fs.unlinkSync(testFile);
-    
+    validateDirectory(dir, description);
     log(`✓ Read/write access validated for ${description}: ${dir}`, 'INFO');
     return true;
   } catch (error) {
-    log(`✗ No read/write access to ${description}: ${dir} - ${error.message}`, 'ERROR');
+    log(`✗ ${error.message}`, 'ERROR');
     return false;
   }
 }
@@ -1040,6 +1032,117 @@ function parseBool(value, defaultValue, name) {
 
 module.exports = { parseBool };
 PARSEBOOL_JS_EOF
+
+    # Create validateConfig.js (embedded)
+    cat > "$work_dir/validateConfig.js" << 'VALIDATECONFIG_JS_EOF'
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+/**
+ * Validate that a string parameter is not empty after trimming.
+ *
+ * @param {string|undefined} value - The value to validate.
+ * @param {string} name - Parameter name used in error messages.
+ * @returns {string} The trimmed value.
+ * @throws {Error} When value is undefined, null, or empty after trimming.
+ */
+function validateNotEmpty(value, name) {
+  if (value === undefined || value === null) {
+    throw new Error(
+      `Parameter '${name}' is required but was not provided. ` +
+      `Set the '${name}' environment variable to a non-empty value.`
+    );
+  }
+
+  const trimmed = String(value).trim();
+
+  if (trimmed === '') {
+    throw new Error(
+      `Parameter '${name}' cannot be an empty string. ` +
+      `Set the '${name}' environment variable to a non-empty value.`
+    );
+  }
+
+  return trimmed;
+}
+
+/**
+ * Validate that a directory path is not empty, exists (or can be created),
+ * and is accessible with read/write permissions.
+ *
+ * @param {string} dir - The directory path to validate.
+ * @param {string} name - Parameter name used in error messages.
+ * @returns {string} The validated directory path.
+ * @throws {Error} When the directory cannot be accessed or created.
+ */
+function validateDirectory(dir, name) {
+  const validated = validateNotEmpty(dir, name);
+
+  if (!fs.existsSync(validated)) {
+    try {
+      fs.mkdirSync(validated, { recursive: true, mode: 0o755 });
+    } catch (error) {
+      throw new Error(
+        `Directory '${validated}' for parameter '${name}' does not exist and could not be created: ${error.message}. ` +
+        `Ensure the parent directory exists and has the correct permissions, or create '${validated}' manually.`
+      );
+    }
+  }
+
+  // Verify it is a directory
+  try {
+    const stats = fs.statSync(validated);
+    if (!stats.isDirectory()) {
+      const err = new Error(
+        `Path '${validated}' for parameter '${name}' exists but is not a directory. ` +
+        `Ensure '${name}' points to a valid directory path.`
+      );
+      err.code = 'NOT_A_DIRECTORY';
+      throw err;
+    }
+  } catch (error) {
+    if (error.code === 'NOT_A_DIRECTORY') {
+      throw error;
+    }
+    throw new Error(
+      `Cannot access path '${validated}' for parameter '${name}': ${error.message}. ` +
+      `Ensure the path exists and has the correct permissions.`
+    );
+  }
+
+  // Test read/write access
+  const testFile = path.join(validated, `.access_test_${process.pid}`);
+  try {
+    fs.writeFileSync(testFile, 'test');
+  } catch (error) {
+    throw new Error(
+      `No write permission on directory '${validated}' for parameter '${name}': ${error.message}. ` +
+      `Ensure the process has write access to '${validated}'.`
+    );
+  }
+
+  try {
+    fs.readFileSync(testFile);
+  } catch (error) {
+    throw new Error(
+      `No read permission on directory '${validated}' for parameter '${name}': ${error.message}. ` +
+      `Ensure the process has read access to '${validated}'.`
+    );
+  }
+
+  try {
+    fs.unlinkSync(testFile);
+  } catch (_) {
+    // Best effort cleanup
+  }
+
+  return validated;
+}
+
+module.exports = { validateNotEmpty, validateDirectory };
+VALIDATECONFIG_JS_EOF
 
     # Create banner.js (embedded)
     cat > "$work_dir/banner.js" << 'BANNER_JS_EOF'

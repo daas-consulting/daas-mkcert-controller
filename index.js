@@ -80,7 +80,7 @@ function log(message, level = 'INFO') {
   const header = `<${priority}>1 ${timestamp} ${HOSTNAME} ${APP_NAME} ${procId} - -`;
   const levelTag = `[${level}]`;
 
-  console.log(`${GRAY}${header}${RESET} ${color}${levelTag}${RESET} ${color}${message}${RESET}`);
+  console.log(`${header} ${color}${levelTag}${RESET} ${color}${message}${RESET}`);
 }
 
 // Validate read/write access to a directory
