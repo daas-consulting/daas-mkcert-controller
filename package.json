@@ -1,6 +1,6 @@
 {
   "name": "daas-mkcert-controller",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Docker service for local development that detects *.localhost domains used by Traefik, generates valid TLS certificates with mkcert, and keeps TLS configuration synchronized without restarting Traefik",
   "main": "index.js",
   "scripts": {

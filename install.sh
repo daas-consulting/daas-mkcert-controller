@@ -9,12 +9,13 @@
 set -e
 
 # Script version
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 # Configuration defaults (can be overridden by environment variables)
 CONTAINER_NAME="${CONTAINER_NAME:-daas-mkcert-controller}"
-IMAGE_NAME="${IMAGE_NAME:-daas-mkcert-controller:latest}"
-INSTALL_CA="${INSTALL_CA:-false}"
+IMAGE_NAME="${IMAGE_NAME:-daas-mkcert-controller}"
+IMAGE_TAG="${IMAGE_TAG:-latest}"
+INSTALL_CA="${INSTALL_CA:-true}"
 TRAEFIK_DIR="${TRAEFIK_DIR:-/etc/traefik}"
 CERTS_DIR="${CERTS_DIR:-/var/lib/daas-mkcert/certs}"
 MKCERT_CA_DIR="${MKCERT_CA_DIR:-$HOME/.local/share/mkcert}"
@@ -69,17 +70,26 @@ Commands:
     logs        Show controller logs
     help        Show this help message
 
+Options:
+    --disable-install-ca    Disable automatic CA installation
+
 Environment Variables:
     CONTAINER_NAME      Container name (default: daas-mkcert-controller)
-    IMAGE_NAME          Docker image name (default: daas-mkcert-controller:latest)
-    INSTALL_CA          Install mkcert CA: true/false (default: false)
+    IMAGE_NAME          Docker image name (default: daas-mkcert-controller)
+    IMAGE_TAG           Docker image tag (default: latest)
+    INSTALL_CA          Install mkcert CA: true/false (default: true)
     TRAEFIK_DIR         Traefik config directory (default: /etc/traefik)
     CERTS_DIR           Certificates directory (default: /var/lib/daas-mkcert/certs)
     MKCERT_CA_DIR       mkcert CA directory (default: ~/.local/share/mkcert)
 
 Examples:
-    # Install with CA installation
-    INSTALL_CA=true $0 install
+    # Install with CA installation (default)
+    $0 install
+
+    # Install without CA installation
+    $0 install --disable-install-ca
+    # or
+    INSTALL_CA=false $0 install
 
     # Install with custom directories
     TRAEFIK_DIR=/custom/traefik CERTS_DIR=/custom/certs $0 install
@@ -88,7 +98,7 @@ Examples:
     $0 uninstall
 
     # Install via curl (single command)
-    curl -fsSL <script-url> | INSTALL_CA=true bash
+    curl -fsSL <script-url> | bash
 
 EOF
 }
@@ -238,6 +248,121 @@ check_traefik() {
     fi
 }
 
+# Verify local dependencies (mkcert)
+verify_local_dependencies() {
+    log_info "Verifying local dependencies..."
+    
+    local missing_deps=()
+    
+    # Check for curl (used to download mkcert in Docker)
+    if ! command -v curl &> /dev/null; then
+        missing_deps+=("curl")
+    fi
+    
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        log_fail "Missing dependencies: ${missing_deps[*]}"
+        log_error "Please install missing dependencies"
+        return 1
+    fi
+    
+    log_success "All local dependencies verified"
+    return 0
+}
+
+# Check if local image exists
+check_local_image() {
+    log_info "Checking for local Docker image..."
+    
+    if docker image inspect "${IMAGE_NAME}:${IMAGE_TAG}" &>/dev/null; then
+        log_success "Local image found: ${IMAGE_NAME}:${IMAGE_TAG}"
+        
+        # Get image version label if it exists
+        local image_version=$(docker image inspect "${IMAGE_NAME}:${IMAGE_TAG}" \
+            --format '{{index .Config.Labels "version"}}' 2>/dev/null || echo "unknown")
+        
+        if [[ "$image_version" != "unknown" ]]; then
+            log_info "Image version: $image_version"
+        fi
+        
+        return 0
+    else
+        log_warn "Local image not found: ${IMAGE_NAME}:${IMAGE_TAG}"
+        return 1
+    fi
+}
+
+# Verify certificates and CA installation
+verify_certificates() {
+    log_info "Verifying certificate installation..."
+    
+    # Check if certificates directory exists
+    if [[ ! -d "$CERTS_DIR" ]]; then
+        log_warn "Certificates directory does not exist: $CERTS_DIR"
+        log_info "Will be created during installation"
+        return 0
+    fi
+    
+    # Count existing certificates
+    local cert_count=$(find "$CERTS_DIR" -name "*.pem" 2>/dev/null | wc -l)
+    if [[ $cert_count -gt 0 ]]; then
+        log_success "Found $cert_count certificate file(s) in $CERTS_DIR"
+    else
+        log_info "No certificates found (this is normal for first-time installation)"
+    fi
+    
+    # Check CA if INSTALL_CA is true
+    if [[ "$INSTALL_CA" == "true" ]]; then
+        log_info "Verifying mkcert CA installation..."
+        
+        if [[ -d "$MKCERT_CA_DIR" ]]; then
+            if [[ -f "$MKCERT_CA_DIR/rootCA.pem" ]] && [[ -f "$MKCERT_CA_DIR/rootCA-key.pem" ]]; then
+                log_success "mkcert CA found in $MKCERT_CA_DIR"
+            else
+                log_warn "mkcert CA directory exists but CA files not found"
+                log_info "CA will be installed during controller startup"
+            fi
+        else
+            log_info "mkcert CA not yet installed (will be installed on first run)"
+        fi
+    fi
+    
+    return 0
+}
+
+# Get Traefik mounted directories
+get_traefik_volumes() {
+    log_info "Detecting Traefik volume mounts..."
+    
+    local traefik_container=$(docker ps --filter "name=traefik" --format "{{.Names}}" | head -1)
+    if [[ -z "$traefik_container" ]]; then
+        traefik_container=$(docker ps --filter "ancestor=traefik" --format "{{.Names}}" | head -1)
+    fi
+    
+    if [[ -z "$traefik_container" ]]; then
+        log_warn "Could not find Traefik container"
+        return 1
+    fi
+    
+    log_info "Found Traefik container: $traefik_container"
+    
+    # Get volume mounts
+    local volumes=$(docker inspect "$traefik_container" \
+        --format '{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}')
+    
+    if [[ -n "$volumes" ]]; then
+        log_info "Traefik volume mounts:"
+        echo "$volumes" | tr ' ' '\n' | while read -r vol; do
+            if [[ -n "$vol" ]]; then
+                log_info "  - $vol"
+            fi
+        done
+    else
+        log_warn "No volume mounts detected for Traefik"
+    fi
+    
+    return 0
+}
+
 # Create Dockerfile if running from stdin
 create_project_files() {
     local work_dir="$1"
@@ -248,7 +373,7 @@ create_project_files() {
     cat > "$work_dir/package.json" << 'PACKAGE_JSON_EOF'
 {
   "name": "daas-mkcert-controller",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Docker service for local development that detects *.localhost domains used by Traefik, generates valid TLS certificates with mkcert, and keeps TLS configuration synchronized without restarting Traefik",
   "main": "index.js",
   "scripts": {
@@ -273,7 +398,7 @@ PACKAGE_JSON_EOF
 
     # Create Dockerfile
     cat > "$work_dir/Dockerfile" << 'DOCKERFILE_EOF'
-FROM node:18-alpine
+FROM node:24.13.0-alpine
 
 # Install mkcert and required tools
 RUN apk add --no-cache \
@@ -317,13 +442,21 @@ const fs = require('fs');
 const path = require('path');
 
 // Configuration from environment variables
-const INSTALL_CA = process.env.INSTALL_CA === 'true';
+const INSTALL_CA = process.env.INSTALL_CA !== 'false'; // Install CA by default
 const TRAEFIK_DIR = process.env.TRAEFIK_DIR || '/etc/traefik';
 const CERTS_DIR = process.env.CERTS_DIR || '/certs';
 const MKCERT_CA_DIR = process.env.MKCERT_CA_DIR || '/root/.local/share/mkcert';
+const THROTTLE_MS = parseInt(process.env.THROTTLE_MS || '300', 10);
+const SCHEDULED_INTERVAL_MS = parseInt(process.env.SCHEDULED_INTERVAL_MS || '60000', 10); // 1 minute
 
 const docker = new Docker({ socketPath: '/var/run/docker.sock' });
 const processedDomains = new Set();
+
+// Throttle and scheduling state
+let reconcileTimer = null;
+let isReconciling = false;
+let scheduledTimer = null;
+let lastReconcileTime = 0;
 
 // Logging utility
 function log(message, level = 'INFO') {
@@ -409,19 +542,46 @@ async function checkTraefikRunning() {
   }
 }
 
-// Extract localhost domains from Traefik labels
-function extractDomainsFromLabels(labels) {
-  const domains = new Set();
+// Parse Traefik labels into a structured object
+function parseTraefikLabels(labels) {
+  const routers = {};
   
   for (const [key, value] of Object.entries(labels)) {
-    // Look for Traefik router rules
-    if (key.includes('traefik.http.routers') && key.endsWith('.rule')) {
-      // Extract domains from rules like: Host(`example.localhost`) || Host(`app.localhost`)
-      const matches = value.match(/Host\(`([^`]+\.localhost)`\)/g);
+    // Parse label keys like: traefik.http.routers.myrouter.rule
+    const routerMatch = key.match(/^traefik\.http\.routers\.([^.]+)\.(.+)$/);
+    if (routerMatch) {
+      const routerName = routerMatch[1];
+      const property = routerMatch[2];
+      
+      if (!routers[routerName]) {
+        routers[routerName] = {};
+      }
+      routers[routerName][property] = value;
+    }
+  }
+  
+  return routers;
+}
+
+// Extract localhost domains from Traefik labels (only if TLS is enabled)
+function extractDomainsFromLabels(labels) {
+  const domains = new Set();
+  const routers = parseTraefikLabels(labels);
+  
+  for (const [routerName, router] of Object.entries(routers)) {
+    // Only process routers with TLS enabled
+    if (!router.tls || router.tls !== 'true') {
+      continue;
+    }
+    
+    // Extract domains from the rule
+    if (router.rule) {
+      const matches = router.rule.match(/Host\(`([^`]+\.localhost)`\)/g);
       if (matches) {
         matches.forEach(match => {
           const domain = match.match(/Host\(`([^`]+)`\)/)[1];
           if (domain.endsWith('.localhost')) {
+            log(`Found TLS-enabled domain: ${domain} (router: ${routerName})`, 'DEBUG');
             domains.add(domain);
           }
         });
@@ -434,18 +594,15 @@ function extractDomainsFromLabels(labels) {
 
 // Generate certificate for a domain
 function generateCertificate(domain) {
-  if (processedDomains.has(domain)) {
-    log(`Certificate for ${domain} already generated`, 'INFO');
-    return;
-  }
-
   try {
     const certPath = path.join(CERTS_DIR, `${domain}.pem`);
     const keyPath = path.join(CERTS_DIR, `${domain}-key.pem`);
 
     if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
-      log(`Certificate files for ${domain} already exist`, 'INFO');
-      processedDomains.add(domain);
+      if (!processedDomains.has(domain)) {
+        log(`Certificate files for ${domain} already exist`, 'INFO');
+        processedDomains.add(domain);
+      }
       return;
     }
 
@@ -462,6 +619,115 @@ function generateCertificate(domain) {
   }
 }
 
+// Write TLS configuration file for Traefik
+function writeTLSConfig(domains) {
+  try {
+    const dynamicPath = path.join(TRAEFIK_DIR, 'dynamic');
+    if (!fs.existsSync(dynamicPath)) {
+      log(`Creating Traefik dynamic directory: ${dynamicPath}`, 'INFO');
+      fs.mkdirSync(dynamicPath, { recursive: true, mode: 0o755 });
+    }
+
+    const tlsConfigPath = path.join(dynamicPath, 'tls.yml');
+    
+    if (domains.length === 0) {
+      log('No domains to configure for TLS', 'DEBUG');
+      return;
+    }
+
+    const certificates = domains.map(d => ({
+      certFile: `/certs/${d}.pem`,
+      keyFile: `/certs/${d}-key.pem`
+    }));
+
+    const yml = `# Auto-generated by daas-mkcert-controller
+# Do not edit manually
+tls:
+  certificates:
+${certificates.map(cert => `    - certFile: ${cert.certFile}
+      keyFile: ${cert.keyFile}`).join('\n')}
+`;
+
+    fs.writeFileSync(tlsConfigPath, yml);
+    log(`✓ TLS configuration updated with ${domains.length} certificate(s)`, 'INFO');
+  } catch (error) {
+    log(`✗ Failed to write TLS configuration: ${error.message}`, 'ERROR');
+  }
+}
+
+// Throttled reconcile function
+function scheduleReconcile() {
+  if (reconcileTimer) {
+    return; // Already scheduled
+  }
+  
+  const now = Date.now();
+  const timeSinceLastReconcile = now - lastReconcileTime;
+  const delay = Math.max(0, THROTTLE_MS - timeSinceLastReconcile);
+  
+  reconcileTimer = setTimeout(async () => {
+    reconcileTimer = null;
+    await reconcile();
+  }, delay);
+  
+  if (delay > 0) {
+    log(`Reconcile scheduled in ${delay}ms`, 'DEBUG');
+  }
+}
+
+// Main reconcile function - scans all containers and updates certificates
+async function reconcile() {
+  if (isReconciling) {
+    log('Reconcile already in progress, skipping', 'DEBUG');
+    return;
+  }
+
+  isReconciling = true;
+  lastReconcileTime = Date.now();
+  
+  try {
+    log('Starting reconciliation...', 'DEBUG');
+    const containers = await docker.listContainers();
+    const allDomains = new Set();
+    
+    for (const containerInfo of containers) {
+      if (containerInfo.Labels) {
+        const domains = extractDomainsFromLabels(containerInfo.Labels);
+        domains.forEach(d => allDomains.add(d));
+      }
+    }
+    
+    const domainList = Array.from(allDomains);
+    log(`Found ${domainList.length} TLS-enabled localhost domain(s)`, 'INFO');
+    
+    // Generate certificates for all domains
+    domainList.forEach(domain => generateCertificate(domain));
+    
+    // Update TLS configuration file
+    writeTLSConfig(domainList);
+    
+    log('✓ Reconciliation complete', 'DEBUG');
+  } catch (error) {
+    log(`✗ Error during reconciliation: ${error.message}`, 'ERROR');
+  } finally {
+    isReconciling = false;
+  }
+}
+
+// Setup scheduled reconciliation (every minute)
+function setupScheduledReconcile() {
+  scheduledTimer = setInterval(async () => {
+    if (!isReconciling) {
+      log('Running scheduled reconciliation', 'DEBUG');
+      await reconcile();
+    } else {
+      log('Skipping scheduled reconciliation (already running)', 'DEBUG');
+    }
+  }, SCHEDULED_INTERVAL_MS);
+  
+  log(`✓ Scheduled reconciliation every ${SCHEDULED_INTERVAL_MS / 1000}s`, 'INFO');
+}
+
 // Monitor Docker events
 async function monitorDockerEvents() {
   log('Starting Docker events monitoring...', 'INFO');
@@ -473,18 +739,12 @@ async function monitorDockerEvents() {
       try {
         const event = JSON.parse(chunk.toString());
         
-        // Listen for container start events
-        if (event.Type === 'container' && (event.Action === 'start' || event.Action === 'create')) {
-          const container = docker.getContainer(event.id);
-          const info = await container.inspect();
-          
-          if (info.Config.Labels) {
-            const domains = extractDomainsFromLabels(info.Config.Labels);
-            if (domains.length > 0) {
-              log(`Detected ${domains.length} localhost domain(s) in container ${info.Name}`, 'INFO');
-              domains.forEach(domain => generateCertificate(domain));
-            }
-          }
+        // Listen for container events
+        if (event.Type === 'container' && 
+            (event.Action === 'start' || event.Action === 'create' || 
+             event.Action === 'die' || event.Action === 'stop')) {
+          log(`Docker event: ${event.Action} for container ${event.Actor.ID.substring(0, 12)}`, 'DEBUG');
+          scheduleReconcile();
         }
       } catch (error) {
         log(`Error processing Docker event: ${error.message}`, 'ERROR');
@@ -505,26 +765,7 @@ async function monitorDockerEvents() {
 // Scan existing containers on startup
 async function scanExistingContainers() {
   log('Scanning existing containers for localhost domains...', 'INFO');
-  
-  try {
-    const containers = await docker.listContainers();
-    let totalDomains = 0;
-    
-    for (const containerInfo of containers) {
-      if (containerInfo.Labels) {
-        const domains = extractDomainsFromLabels(containerInfo.Labels);
-        if (domains.length > 0) {
-          log(`Found ${domains.length} localhost domain(s) in container ${containerInfo.Names[0]}`, 'INFO');
-          domains.forEach(domain => generateCertificate(domain));
-          totalDomains += domains.length;
-        }
-      }
-    }
-    
-    log(`✓ Scan complete. Found ${totalDomains} localhost domain(s)`, 'INFO');
-  } catch (error) {
-    log(`✗ Error scanning existing containers: ${error.message}`, 'ERROR');
-  }
+  await reconcile();
 }
 
 // Monitor Traefik dynamic configuration files
@@ -540,18 +781,24 @@ function monitorTraefikFiles() {
   
   const watcher = chokidar.watch(dynamicPath, {
     persistent: true,
-    ignoreInitial: false,
-    depth: 2
+    ignoreInitial: true,
+    depth: 2,
+    ignored: /tls\.yml$/ // Ignore our own tls.yml file
   });
 
   watcher.on('add', (filePath) => {
-    log(`Traefik file added: ${filePath}`, 'INFO');
-    processTraefikFile(filePath);
+    log(`Traefik file added: ${filePath}`, 'DEBUG');
+    scheduleReconcile();
   });
 
   watcher.on('change', (filePath) => {
-    log(`Traefik file changed: ${filePath}`, 'INFO');
-    processTraefikFile(filePath);
+    log(`Traefik file changed: ${filePath}`, 'DEBUG');
+    scheduleReconcile();
+  });
+
+  watcher.on('unlink', (filePath) => {
+    log(`Traefik file removed: ${filePath}`, 'DEBUG');
+    scheduleReconcile();
   });
 
   watcher.on('error', (error) => {
@@ -559,48 +806,6 @@ function monitorTraefikFiles() {
   });
 
   log('✓ Traefik files monitoring started', 'INFO');
-}
-
-// Process Traefik configuration file
-function processTraefikFile(filePath) {
-  try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    
-    // Try to parse as JSON or YAML
-    let config;
-    if (filePath.endsWith('.json')) {
-      config = JSON.parse(content);
-    } else if (filePath.endsWith('.yml') || filePath.endsWith('.yaml')) {
-      // Simple YAML parsing for Host() rules
-      const matches = content.match(/Host\(`([^`]+\.localhost)`\)/g);
-      if (matches) {
-        matches.forEach(match => {
-          const domain = match.match(/Host\(`([^`]+)`\)/)[1];
-          if (domain.endsWith('.localhost')) {
-            generateCertificate(domain);
-          }
-        });
-      }
-      return;
-    }
-    
-    // Process JSON config
-    if (config && config.http && config.http.routers) {
-      for (const router of Object.values(config.http.routers)) {
-        if (router.rule) {
-          const matches = router.rule.match(/Host\(`([^`]+\.localhost)`\)/g);
-          if (matches) {
-            matches.forEach(match => {
-              const domain = match.match(/Host\(`([^`]+)`\)/)[1];
-              generateCertificate(domain);
-            });
-          }
-        }
-      }
-    }
-  } catch (error) {
-    log(`Error processing Traefik file ${filePath}: ${error.message}`, 'ERROR');
-  }
 }
 
 // Main startup function
@@ -611,6 +816,8 @@ async function main() {
   log(`  - TRAEFIK_DIR: ${TRAEFIK_DIR}`, 'INFO');
   log(`  - CERTS_DIR: ${CERTS_DIR}`, 'INFO');
   log(`  - MKCERT_CA_DIR: ${MKCERT_CA_DIR}`, 'INFO');
+  log(`  - THROTTLE_MS: ${THROTTLE_MS}`, 'INFO');
+  log(`  - SCHEDULED_INTERVAL_MS: ${SCHEDULED_INTERVAL_MS}`, 'INFO');
 
   // Validate access to required directories
   if (!validateAccess(CERTS_DIR, 'certificates directory')) {
@@ -637,6 +844,7 @@ async function main() {
   await scanExistingContainers();
   await monitorDockerEvents();
   monitorTraefikFiles();
+  setupScheduledReconcile();
 
   log('=== daas-mkcert-controller is running ===', 'INFO');
   log('Press Ctrl+C to stop', 'INFO');
@@ -645,11 +853,15 @@ async function main() {
 // Handle shutdown gracefully
 process.on('SIGINT', () => {
   log('Shutting down...', 'INFO');
+  if (reconcileTimer) clearTimeout(reconcileTimer);
+  if (scheduledTimer) clearInterval(scheduledTimer);
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   log('Shutting down...', 'INFO');
+  if (reconcileTimer) clearTimeout(reconcileTimer);
+  if (scheduledTimer) clearInterval(scheduledTimer);
   process.exit(0);
 });
 
@@ -679,7 +891,7 @@ DOCKERIGNORE_EOF
 
 # Build Docker image
 build_image() {
-    log_info "Building Docker image: $IMAGE_NAME..."
+    log_info "Building Docker image: ${IMAGE_NAME}:${IMAGE_TAG}..."
     
     # Determine build context
     local build_dir
@@ -699,9 +911,15 @@ build_image() {
         fi
     fi
     
-    # Build the image
-    if docker build -t "$IMAGE_NAME" "$build_dir"; then
+    # Build the image with version label
+    if docker build \
+        --label "version=${VERSION}" \
+        -t "${IMAGE_NAME}:${IMAGE_TAG}" \
+        -t "${IMAGE_NAME}:${VERSION}" \
+        "$build_dir"; then
         log_success "Docker image built successfully"
+        log_info "Tagged as: ${IMAGE_NAME}:${IMAGE_TAG}"
+        log_info "Tagged as: ${IMAGE_NAME}:${VERSION}"
         
         # Clean up temp directory if created
         if [[ "$build_dir" != "." ]]; then
@@ -733,23 +951,34 @@ install_controller() {
     validate_environment
     validate_directories
     
+    # Verify local dependencies
+    verify_local_dependencies
+    
+    # Verify certificates and CA
+    verify_certificates
+    
     # Check if Traefik is running
     if ! check_traefik; then
         log_error "Please start Traefik and try again"
         exit 1
     fi
     
-    # Build image if it doesn't exist
-    if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+    # Get Traefik volume mounts for information
+    get_traefik_volumes || true
+    
+    # Check if local image exists
+    if check_local_image; then
+        log_info "Using existing image: ${IMAGE_NAME}:${IMAGE_TAG}"
+        if [[ -t 0 ]]; then
+            read -p "Do you want to rebuild the image? (y/N): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                build_image
+            fi
+        fi
+    else
         log_info "Image not found, building..."
         build_image
-    else
-        log_info "Using existing image: $IMAGE_NAME"
-        read -p "Do you want to rebuild the image? (y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            build_image
-        fi
     fi
     
     # Stop existing container if running
@@ -785,7 +1014,7 @@ install_controller() {
         -e "CERTS_DIR=/certs" \
         -e "MKCERT_CA_DIR=/root/.local/share/mkcert" \
         "${volume_args[@]}" \
-        "$IMAGE_NAME"; then
+        "${IMAGE_NAME}:${IMAGE_TAG}"; then
         
         log_success "Container started successfully"
         log_info "Container name: $CONTAINER_NAME"
@@ -819,27 +1048,41 @@ uninstall_controller() {
         log_warn "Container not found: $CONTAINER_NAME"
     fi
     
-    # Remove image
-    if docker image inspect "$IMAGE_NAME" &>/dev/null; then
-        read -p "Do you want to remove the Docker image? (y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            log_info "Removing Docker image..."
-            docker rmi "$IMAGE_NAME" 2>/dev/null || true
-            log_success "Docker image removed"
+    # Remove images
+    local images_to_remove=()
+    if docker image inspect "${IMAGE_NAME}:${IMAGE_TAG}" &>/dev/null; then
+        images_to_remove+=("${IMAGE_NAME}:${IMAGE_TAG}")
+    fi
+    if docker image inspect "${IMAGE_NAME}:${VERSION}" &>/dev/null; then
+        images_to_remove+=("${IMAGE_NAME}:${VERSION}")
+    fi
+    
+    if [[ ${#images_to_remove[@]} -gt 0 ]]; then
+        if [[ -t 0 ]]; then
+            read -p "Do you want to remove the Docker image(s)? (y/N): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                log_info "Removing Docker images..."
+                for img in "${images_to_remove[@]}"; do
+                    docker rmi "$img" 2>/dev/null || true
+                done
+                log_success "Docker images removed"
+            fi
         fi
     else
-        log_warn "Image not found: $IMAGE_NAME"
+        log_warn "No images found for: $IMAGE_NAME"
     fi
     
     # Ask about certificate cleanup
     if [[ -d "$CERTS_DIR" ]]; then
-        read -p "Do you want to remove generated certificates in $CERTS_DIR? (y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            log_info "Removing certificates..."
-            rm -rf "$CERTS_DIR"
-            log_success "Certificates removed"
+        if [[ -t 0 ]]; then
+            read -p "Do you want to remove generated certificates in $CERTS_DIR? (y/N): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                log_info "Removing certificates..."
+                rm -rf "$CERTS_DIR"
+                log_success "Certificates removed"
+            fi
         fi
     fi
     
@@ -880,7 +1123,24 @@ show_logs() {
 
 # Main function
 main() {
-    local command="${1:-}"
+    # Parse arguments for flags
+    local command=""
+    local args=()
+    
+    for arg in "$@"; do
+        case "$arg" in
+            --disable-install-ca)
+                INSTALL_CA=false
+                ;;
+            *)
+                if [[ -z "$command" ]]; then
+                    command="$arg"
+                else
+                    args+=("$arg")
+                fi
+                ;;
+        esac
+    done
     
     case "$command" in
         install)
