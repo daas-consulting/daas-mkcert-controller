@@ -5,6 +5,7 @@ const chokidar = require('chokidar');
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { printBanner } = require('./banner');
 
 // Configuration from environment variables
 const INSTALL_CA = process.env.INSTALL_CA !== 'false'; // Install CA by default
@@ -375,6 +376,7 @@ function monitorTraefikFiles() {
 
 // Main startup function
 async function main() {
+  printBanner();
   log('=== daas-mkcert-controller starting ===', 'INFO');
   log(`Configuration:`, 'INFO');
   log(`  - INSTALL_CA: ${INSTALL_CA}`, 'INFO');
