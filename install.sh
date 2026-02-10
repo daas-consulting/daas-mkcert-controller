@@ -1217,6 +1217,8 @@ install_controller() {
         if [[ -d "$TRAEFIK_DIR" ]]; then
             log_info "Falling back to TRAEFIK_DIR: $TRAEFIK_DIR"
             volume_args+=(-v "$TRAEFIK_DIR:/etc/traefik")
+        else
+            log_warn "No valid Traefik config directory found to mount"
         fi
     fi
     
