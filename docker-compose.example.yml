@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Example Traefik configuration (for reference)
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik:/etc/traefik
+    networks:
+      - web
+    restart: unless-stopped
+
+  # Example application using Traefik with localhost domain
+  example-app:
+    image: nginx:alpine
+    container_name: example-app
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.example.rule=Host(`example.localhost`)"
+      - "traefik.http.routers.example.entrypoints=websecure"
+      - "traefik.http.routers.example.tls=true"
+      - "traefik.http.services.example.loadbalancer.server.port=80"
+    networks:
+      - web
+    restart: unless-stopped
+
+  # Another example with multiple domains
+  multi-app:
+    image: nginx:alpine
+    container_name: multi-app
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.multi.rule=Host(`app1.localhost`) || Host(`app2.localhost`)"
+      - "traefik.http.routers.multi.entrypoints=websecure"
+      - "traefik.http.routers.multi.tls=true"
+      - "traefik.http.services.multi.loadbalancer.server.port=80"
+    networks:
+      - web
+    restart: unless-stopped
+
+networks:
+  web:
+    name: web
+    driver: bridge
+
+# Note: After starting these services, install daas-mkcert-controller:
+# 
+# INSTALL_CA=true ./install.sh install
+#
+# The controller will:
+# 1. Detect domains: example.localhost, app1.localhost, app2.localhost
+# 2. Generate TLS certificates for each domain
+# 3. Store them in /var/lib/daas-mkcert/certs/
+# 4. Monitor for new containers and generate certificates automatically
