@@ -24,7 +24,7 @@ Successfully implemented a complete self-installable Bash script for **daas-mkce
 
 #### **Dockerfile** (31 lines)
 - Alpine-based Node.js 18 image
-- Installs mkcert for Linux AMD64
+- Installs mkcert via Alpine package manager (apk)
 - Production dependencies only
 - Optimized for small image size
 

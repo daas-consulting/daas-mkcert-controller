@@ -2,12 +2,9 @@ FROM node:24.13.0-alpine
 
 # Install mkcert and required tools
 RUN apk add --no-cache \
-    curl \
     ca-certificates \
     nss-tools \
-    && curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/amd64" \
-    && chmod +x mkcert-v*-linux-amd64 \
-    && mv mkcert-v*-linux-amd64 /usr/local/bin/mkcert
+    mkcert
 
 # Create app directory
 WORKDIR /app
