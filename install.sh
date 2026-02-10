@@ -53,7 +53,7 @@ _syslog_log() {
     local timestamp
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")
     local header="<${priority}>1 ${timestamp} ${_HOSTNAME} ${_APP_NAME} $$ - -"
-    echo -e "${header} ${color}[${level}]${NC} ${color}${message}${NC}"
+    echo -e "${header} ${color}[${level}]${NC} ${message}"
 }
 
 # Logging functions - Syslog RFC 5424 format with colors
@@ -584,7 +584,7 @@ function log(message, level = 'INFO') {
   const header = `<${priority}>1 ${timestamp} ${HOSTNAME} ${APP_NAME} ${procId} - -`;
   const levelTag = `[${level}]`;
 
-  console.log(`${header} ${color}${levelTag}${RESET} ${color}${message}${RESET}`);
+  console.log(`${header} ${color}${levelTag}${RESET} ${message}`);
 }
 
 // Validate read/write access to a directory
