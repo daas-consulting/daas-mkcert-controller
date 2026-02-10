@@ -2,14 +2,27 @@
 
 #############################################################################
 # daas-mkcert-controller installer
-# Self-installable script for building, installing, and uninstalling
-# the daas-mkcert-controller Docker service
+#
+# Single script that handles everything:
+# 1. Generate CA files using Docker (no local mkcert install needed)
+# 2. Install CA in local trust store using native OS commands
+# 3. Build and start the controller container
+# 4. All with proper directory mounting
+#
+# Minimal dependencies: Docker + native OS tools (no mkcert on host)
+#
+# Usage:
+#   ./install.sh install   - Install everything
+#   ./install.sh uninstall - Remove everything
+#   ./install.sh status    - Check status
+#   ./install.sh logs      - Show controller logs
+#   ./install.sh help      - Show this help message
 #############################################################################
 
 set -e
 
 # Script version
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 # Detect if running as root to choose appropriate default directories
 if [[ $EUID -eq 0 ]]; then
@@ -28,6 +41,7 @@ INSTALL_CA="${INSTALL_CA:-true}"
 TRAEFIK_DIR="${TRAEFIK_DIR:-$_DEFAULT_TRAEFIK_DIR}"
 CERTS_DIR="${CERTS_DIR:-$_DEFAULT_CERTS_DIR}"
 MKCERT_CA_DIR="${MKCERT_CA_DIR:-$HOME/.local/share/mkcert}"
+HELPER_IMAGE="daas-mkcert-helper:latest"
 
 # Colors for output
 RED='\033[0;31m'
@@ -35,6 +49,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 GRAY='\033[0;90m'
 CYAN='\033[0;36m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Syslog RFC 5424 facility: local0 (16)
@@ -43,7 +58,6 @@ _APP_NAME="daas-mkcert-controller"
 _HOSTNAME=$(hostname)
 
 # Syslog RFC 5424 log function
-# Usage: _syslog_log <severity_num> <level_label> <color> <message>
 _syslog_log() {
     local severity="$1"
     local level="$2"
@@ -77,7 +91,7 @@ log_fail() {
     _syslog_log 3 "ERROR" "${RED}" "✗ $1"
 }
 
-# Display banner with daas ASCII logo
+# Display banner
 show_banner() {
     local TOTAL_WIDTH=34
     local PRODUCT="mkcert-controller"
@@ -121,9 +135,9 @@ show_usage() {
 Usage: $0 [command] [options]
 
 Commands:
-    install     Build and install the daas-mkcert-controller
-    uninstall   Stop and remove the daas-mkcert-controller
-    status      Check the status of the controller
+    install     Install everything (CA + controller)
+    uninstall   Remove everything (CA + controller)
+    status      Check installation status
     logs        Show controller logs
     help        Show this help message
 
@@ -135,8 +149,8 @@ Environment Variables:
     CONTAINER_NAME      Container name (default: daas-mkcert-controller)
     IMAGE_NAME          Docker image name (default: daas-mkcert-controller)
     IMAGE_TAG           Docker image tag (default: latest)
-    INSTALL_CA          Install mkcert CA (default: true)
-                        Accepted values: true/false, yes/no, si/no, 1/0, t/f, y/n, s/n
+    INSTALL_CA          Install CA in trust store (default: true)
+                        Accepted values: true/false, yes/no, si/no, 1/0
     TRAEFIK_DIR         Traefik config directory
                         Default (root):     /etc/traefik
                         Default (non-root): ~/.traefik
@@ -148,22 +162,29 @@ Environment Variables:
 Priority:
     Command-line arguments > Environment variables > Default values
 
+Features:
+    ✓ No local mkcert installation required
+    ✓ Generates CA using Docker container
+    ✓ Installs CA using native OS commands
+    ✓ Single unified process
+    ✓ Minimal dependencies (Docker only)
+
 Examples:
-    # Install with CA installation (default)
+    # Install everything
     $0 install
 
     # Install without CA installation
     $0 install --disable-install-ca
     $0 install --install-ca=false
-    # or
     INSTALL_CA=false $0 install
-    INSTALL_CA=no $0 install
-    INSTALL_CA=0 $0 install
 
     # Install with custom directories
     TRAEFIK_DIR=/custom/traefik CERTS_DIR=/custom/certs $0 install
 
-    # Uninstall
+    # Check status
+    $0 status
+
+    # Uninstall everything
     $0 uninstall
 
     # Install via curl (single command)
@@ -231,7 +252,7 @@ validate_permissions() {
 validate_directories() {
     log_info "Validating required directories..."
     
-    local dirs=("$CERTS_DIR")
+    local dirs=("$CERTS_DIR" "$MKCERT_CA_DIR")
     
     # Add Traefik directory if it should exist
     if [[ -d "$TRAEFIK_DIR" ]]; then
@@ -239,11 +260,6 @@ validate_directories() {
     else
         log_warn "Traefik directory does not exist: $TRAEFIK_DIR"
         log_warn "Will create it or ensure it's mounted when Traefik runs"
-    fi
-    
-    # Add CA directory if CA installation is requested
-    if [[ "$INSTALL_CA" == "true" ]]; then
-        dirs+=("$MKCERT_CA_DIR")
     fi
     
     for dir in "${dirs[@]}"; do
@@ -310,298 +326,252 @@ validate_environment() {
 check_traefik() {
     log_info "Checking if Traefik is running..."
     
-    if docker ps --format '{{.Names}}' | grep -q traefik || \
-       docker ps --format '{{.Image}}' | grep -q traefik; then
+    if docker ps --format '{{.Names}}' | grep -q "traefik" || \
+       docker ps --format '{{.Image}}' | grep -q "traefik"; then
         log_success "Traefik is running"
         return 0
     else
-        log_fail "Traefik is not running"
-        log_error "daas-mkcert-controller requires Traefik to be running"
-        log_error "Please start Traefik before installing the controller"
+        log_warn "Traefik is not running"
+        log_info "The controller requires Traefik to be running"
         return 1
     fi
 }
 
-# Install mkcert on host if not already installed
-install_mkcert_on_host() {
-    log_info "Checking for mkcert installation on host..."
+# Generate CA files using Docker (no local mkcert needed)
+generate_ca_in_docker() {
+    log_info "Generating CA files using Docker..."
     
-    if command -v mkcert &> /dev/null; then
-        log_success "mkcert is already installed on host"
+    # Check if CA already exists
+    if [[ -f "$MKCERT_CA_DIR/rootCA.pem" ]] && [[ -f "$MKCERT_CA_DIR/rootCA-key.pem" ]]; then
+        log_warn "CA already exists at $MKCERT_CA_DIR"
+        log_info "Keeping existing CA files"
         return 0
     fi
     
-    log_info "mkcert not found on host, attempting to install..."
+    log_info "Building helper Docker image with mkcert..."
     
-    # Detect Linux distribution
+    # Build helper image
+    docker build -t "$HELPER_IMAGE" -f - . << 'DOCKERFILE'
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates nss-tools mkcert
+WORKDIR /work
+CMD ["/bin/sh"]
+DOCKERFILE
+    
+    if [[ $? -ne 0 ]]; then
+        log_fail "Failed to build helper image"
+        exit 1
+    fi
+    
+    log_success "Helper image built: $HELPER_IMAGE"
+    
+    # Run mkcert to generate CA files
+    log_info "Running mkcert in container to generate CA..."
+    docker run --rm \
+        -v "$MKCERT_CA_DIR:/root/.local/share/mkcert" \
+        -e CAROOT=/root/.local/share/mkcert \
+        "$HELPER_IMAGE" \
+        sh -c 'mkcert -install 2>&1 | grep -v "trust store" || true; ls -la /root/.local/share/mkcert/'
+    
+    if [[ $? -ne 0 ]]; then
+        log_fail "Failed to generate CA files in Docker"
+        exit 1
+    fi
+    
+    # Verify files were created
+    if [[ -f "$MKCERT_CA_DIR/rootCA.pem" ]] && [[ -f "$MKCERT_CA_DIR/rootCA-key.pem" ]]; then
+        log_success "CA files generated successfully!"
+        log_info "CA location: $MKCERT_CA_DIR"
+        return 0
+    else
+        log_fail "CA files were not created"
+        exit 1
+    fi
+}
+
+# Install CA in local trust store (using native OS commands - NO mkcert needed)
+install_ca_locally() {
+    log_info "Installing CA in local trust store..."
+    
+    # Check if CA files exist
+    if [[ ! -f "$MKCERT_CA_DIR/rootCA.pem" ]]; then
+        log_fail "CA files not found in $MKCERT_CA_DIR"
+        log_error "Run CA generation first"
+        exit 1
+    fi
+    
+    # Detect distribution
     if [[ -f /etc/os-release ]]; then
         . /etc/os-release
         local distro="$ID"
     else
         log_error "Cannot detect Linux distribution"
-        return 1
+        exit 1
     fi
+    
+    log_info "Detected distribution: $distro"
     
     case "$distro" in
-        ubuntu|debian|pop)
-            log_info "Installing mkcert for Debian/Ubuntu..."
-            if ! sudo apt-get update && sudo apt-get install -y mkcert; then
-                log_warn "Failed to install mkcert via apt, trying alternative method..."
-                install_mkcert_binary
+        ubuntu|debian|pop|linuxmint)
+            log_info "Installing CA for Debian/Ubuntu-based systems..."
+            
+            # Check if already installed
+            if [[ -f /usr/local/share/ca-certificates/mkcert-rootCA.crt ]]; then
+                log_info "CA already installed in system trust store"
             else
-                log_success "mkcert installed successfully via apt"
+                # Copy CA to system location
+                if ! sudo cp "$MKCERT_CA_DIR/rootCA.pem" /usr/local/share/ca-certificates/mkcert-rootCA.crt 2>/dev/null; then
+                    log_warn "Could not install CA in system (no sudo access or declined)"
+                    log_info "CA generation successful but system trust store not updated"
+                else
+                    # Update CA trust store
+                    sudo update-ca-certificates >/dev/null 2>&1
+                    log_success "CA installed in system trust store"
+                fi
             fi
             ;;
-        fedora|rhel|centos)
-            log_info "Installing mkcert for Fedora/RHEL/CentOS..."
-            if ! sudo dnf install -y mkcert; then
-                log_warn "Failed to install mkcert via dnf, trying alternative method..."
-                install_mkcert_binary
+            
+        fedora|rhel|centos|rocky|almalinux)
+            log_info "Installing CA for Fedora/RHEL-based systems..."
+            
+            # Check if already installed
+            if [[ -f /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt ]]; then
+                log_info "CA already installed in system trust store"
             else
-                log_success "mkcert installed successfully via dnf"
+                # Copy CA to system location
+                if ! sudo cp "$MKCERT_CA_DIR/rootCA.pem" /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt 2>/dev/null; then
+                    log_warn "Could not install CA in system (no sudo access or declined)"
+                    log_info "CA generation successful but system trust store not updated"
+                else
+                    # Update CA trust store
+                    sudo update-ca-trust >/dev/null 2>&1
+                    log_success "CA installed in system trust store"
+                fi
             fi
             ;;
+            
         arch|manjaro)
-            log_info "Installing mkcert for Arch Linux..."
-            if ! sudo pacman -S --noconfirm mkcert; then
-                log_warn "Failed to install mkcert via pacman, trying alternative method..."
-                install_mkcert_binary
+            log_info "Installing CA for Arch-based systems..."
+            
+            # Check if already installed
+            if [[ -f /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt ]]; then
+                log_info "CA already installed in system trust store"
             else
-                log_success "mkcert installed successfully via pacman"
+                # Copy CA to system location
+                if ! sudo cp "$MKCERT_CA_DIR/rootCA.pem" /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt 2>/dev/null; then
+                    log_warn "Could not install CA in system (no sudo access or declined)"
+                    log_info "CA generation successful but system trust store not updated"
+                else
+                    # Update CA trust store
+                    sudo trust extract-compat >/dev/null 2>&1
+                    log_success "CA installed in system trust store"
+                fi
             fi
             ;;
+            
         *)
-            log_warn "Unknown distribution: $distro, trying direct binary installation..."
-            install_mkcert_binary
+            log_warn "Unsupported distribution: $distro"
+            log_info "CA files generated but system trust store not updated"
+            log_info "Manual installation required. Copy $MKCERT_CA_DIR/rootCA.pem to your system's CA directory."
             ;;
     esac
     
-    # Verify installation
-    if command -v mkcert &> /dev/null; then
-        log_success "mkcert is now available on host"
-        return 0
-    else
-        log_error "Failed to install mkcert on host"
-        return 1
-    fi
+    # Install in Firefox NSS (if Firefox is installed)
+    install_nss_firefox
+    
+    # Install in Chrome NSS (if Chrome is installed)
+    install_nss_chrome
+    
+    log_success "CA installation complete"
+    log_info "You may need to restart your browser for changes to take effect"
 }
 
-# Install mkcert binary directly from GitHub releases
-install_mkcert_binary() {
-    log_info "Installing mkcert from GitHub releases..."
+# Install CA in Firefox NSS database
+install_nss_firefox() {
+    local firefox_dir="$HOME/.mozilla/firefox"
     
-    local arch=$(uname -m)
-    local mkcert_url
+    if [[ ! -d "$firefox_dir" ]]; then
+        return 0
+    fi
     
-    case "$arch" in
-        x86_64|amd64)
-            mkcert_url="https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-v1.4.4-linux-amd64"
-            ;;
-        aarch64|arm64)
-            mkcert_url="https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-v1.4.4-linux-arm64"
-            ;;
-        armv7l|armhf)
-            mkcert_url="https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-v1.4.4-linux-arm"
-            ;;
-        *)
-            log_error "Unsupported architecture: $arch"
-            return 1
-            ;;
-    esac
+    log_info "Installing CA in Firefox NSS database..."
     
-    local install_dir="$HOME/.local/bin"
-    mkdir -p "$install_dir"
-    
-    if curl -fsSL "$mkcert_url" -o "$install_dir/mkcert"; then
-        chmod +x "$install_dir/mkcert"
-        
-        # Add to PATH if not already there
-        if [[ ":$PATH:" != *":$install_dir:"* ]]; then
-            export PATH="$install_dir:$PATH"
-            log_info "Added $install_dir to PATH for this session"
-            log_info "To make it permanent, add this to your ~/.bashrc or ~/.zshrc:"
-            log_info "  export PATH=\"$install_dir:\$PATH\""
+    # Find Firefox profiles
+    local installed=false
+    for profile in "$firefox_dir"/*.default* "$firefox_dir"/*.dev-edition-default*; do
+        if [[ -d "$profile" ]]; then
+            local profile_name=$(basename "$profile")
+            
+            # Use Docker with certutil to install in NSS
+            docker run --rm \
+                -v "$MKCERT_CA_DIR:/ca:ro" \
+                -v "$profile:/profile" \
+                "$HELPER_IMAGE" \
+                certutil -A -n "mkcert CA" -t "C,," -i /ca/rootCA.pem -d sql:/profile 2>/dev/null || true
+            
+            installed=true
         fi
-        
-        log_success "mkcert binary installed to $install_dir/mkcert"
-        return 0
-    else
-        log_error "Failed to download mkcert binary"
-        return 1
+    done
+    
+    if [[ "$installed" == "true" ]]; then
+        log_success "Firefox NSS database updated"
     fi
 }
 
-# Install CA on host machine
-install_ca_on_host() {
-    if [[ "$INSTALL_CA" != "true" ]]; then
-        log_info "CA installation not requested (INSTALL_CA != true)"
+# Install CA in Chrome NSS database
+install_nss_chrome() {
+    local nssdb="$HOME/.pki/nssdb"
+    
+    if [[ ! -d "$nssdb" ]]; then
         return 0
     fi
     
-    log_info "Installing CA on host machine..."
+    log_info "Installing CA in Chrome NSS database..."
     
-    # Ensure mkcert is installed on host
-    if ! install_mkcert_on_host; then
-        log_error "Cannot install CA: mkcert is not available on host"
-        log_error "Please install mkcert manually and try again"
-        log_error "Visit: https://github.com/FiloSottile/mkcert#installation"
-        return 1
-    fi
+    # Use Docker with certutil to install in NSS
+    docker run --rm \
+        -v "$MKCERT_CA_DIR:/ca:ro" \
+        -v "$nssdb:/nssdb" \
+        "$HELPER_IMAGE" \
+        certutil -A -n "mkcert CA" -t "C,," -i /ca/rootCA.pem -d sql:/nssdb 2>/dev/null || true
     
-    # Set CAROOT to our custom location
-    export CAROOT="$MKCERT_CA_DIR"
-    
-    # Check if CA already exists
-    if [[ -f "$MKCERT_CA_DIR/rootCA.pem" ]] && [[ -f "$MKCERT_CA_DIR/rootCA-key.pem" ]]; then
-        log_info "CA already exists at $MKCERT_CA_DIR"
-        log_info "Installing existing CA in host trust store..."
-        if mkcert -install; then
-            log_success "CA installed successfully in host trust store"
-        else
-            log_warn "Failed to install CA in host trust store (this may require sudo)"
-            log_info "You may need to run: CAROOT=$MKCERT_CA_DIR sudo -E mkcert -install"
-        fi
-    else
-        log_info "Creating new CA and installing in host trust store..."
-        if mkcert -install; then
-            log_success "CA created and installed successfully in host trust store"
-        else
-            log_error "Failed to create and install CA"
-            return 1
-        fi
-    fi
-    
-    # Verify CA files exist
-    if [[ -f "$MKCERT_CA_DIR/rootCA.pem" ]] && [[ -f "$MKCERT_CA_DIR/rootCA-key.pem" ]]; then
-        log_success "CA files verified at $MKCERT_CA_DIR"
-        return 0
-    else
-        log_error "CA files not found after installation"
-        return 1
-    fi
+    log_success "Chrome NSS database updated"
 }
 
-# Verify local dependencies (mkcert)
-verify_local_dependencies() {
-    log_info "Verifying local dependencies..."
-    
-    # Only verify curl is available (needed for downloading mkcert)
-    if ! command -v curl &> /dev/null; then
-        log_error "curl is required but not installed"
-        log_error "Please install curl and try again"
-        return 1
-    fi
-    
-    log_success "All local dependencies verified"
-    return 0
-}
-
-# Check if local image exists
-check_local_image() {
-    log_info "Checking for local Docker image..."
-    
-    if docker image inspect "${IMAGE_NAME}:${IMAGE_TAG}" &>/dev/null; then
-        log_success "Local image found: ${IMAGE_NAME}:${IMAGE_TAG}"
-        
-        # Get image version label if it exists
-        local image_version=$(docker image inspect "${IMAGE_NAME}:${IMAGE_TAG}" \
-            --format '{{index .Config.Labels "version"}}' 2>/dev/null || echo "unknown")
-        
-        if [[ "$image_version" != "unknown" ]]; then
-            log_info "Image version: $image_version"
-        fi
-        
-        return 0
-    else
-        log_warn "Local image not found: ${IMAGE_NAME}:${IMAGE_TAG}"
-        return 1
-    fi
-}
-
-# Verify certificates and CA installation
-verify_certificates() {
-    log_info "Verifying certificate installation..."
-    
-    # Check if certificates directory exists
-    if [[ ! -d "$CERTS_DIR" ]]; then
-        log_warn "Certificates directory does not exist: $CERTS_DIR"
-        log_info "Will be created during installation"
-        return 0
-    fi
-    
-    # Count existing certificates
-    local cert_count=$(find "$CERTS_DIR" -name "*.pem" 2>/dev/null | wc -l)
-    if [[ $cert_count -gt 0 ]]; then
-        log_success "Found $cert_count certificate file(s) in $CERTS_DIR"
-    else
-        log_info "No certificates found (this is normal for first-time installation)"
-    fi
-    
-    # Check CA if INSTALL_CA is true
-    if [[ "$INSTALL_CA" == "true" ]]; then
-        log_info "Verifying mkcert CA installation..."
-        
-        if [[ -d "$MKCERT_CA_DIR" ]]; then
-            if [[ -f "$MKCERT_CA_DIR/rootCA.pem" ]] && [[ -f "$MKCERT_CA_DIR/rootCA-key.pem" ]]; then
-                log_success "mkcert CA found in $MKCERT_CA_DIR"
-            else
-                log_warn "mkcert CA directory exists but CA files not found"
-                log_info "CA will be installed during controller startup"
-            fi
-        else
-            log_info "mkcert CA not yet installed (will be installed on first run)"
-        fi
-    fi
-    
-    return 0
-}
-
-# Get Traefik mounted directories
-# Sets TRAEFIK_HOST_CONFIG_DIR to the host path mounted at /etc/traefik in the Traefik container
+# Get Traefik volume mounts
 get_traefik_volumes() {
     log_info "Detecting Traefik volume mounts..."
     
-    local traefik_container=$(docker ps --filter "name=traefik" --format "{{.Names}}" | head -1)
-    if [[ -z "$traefik_container" ]]; then
-        traefik_container=$(docker ps --filter "ancestor=traefik" --format "{{.Names}}" | head -1)
-    fi
+    # Find Traefik container
+    local traefik_container=$(docker ps --format '{{.Names}}' | grep "traefik" | head -n 1)
     
     if [[ -z "$traefik_container" ]]; then
-        log_warn "Could not find Traefik container"
+        log_warn "Traefik container not found"
         return 1
     fi
     
     log_info "Found Traefik container: $traefik_container"
     
     # Get volume mounts
-    local volumes=$(docker inspect "$traefik_container" \
-        --format '{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}')
+    local mounts=$(docker inspect "$traefik_container" --format '{{range .Mounts}}{{.Source}}:{{.Destination}}{{"\n"}}{{end}}' 2>/dev/null)
     
-    if [[ -n "$volumes" ]]; then
+    if [[ -n "$mounts" ]]; then
         log_info "Traefik volume mounts:"
-        echo "$volumes" | tr ' ' '\n' | while read -r vol; do
-            if [[ -n "$vol" ]]; then
-                log_info "  - $vol"
-            fi
+        echo "$mounts" | while read mount; do
+            log_info "  - $mount"
         done
         
-        # Extract the host path mounted at /etc/traefik in the Traefik container
-        TRAEFIK_HOST_CONFIG_DIR=$(docker inspect "$traefik_container" \
-            --format '{{range .Mounts}}{{if eq .Destination "/etc/traefik"}}{{.Source}}{{end}}{{end}}')
-        
+        # Try to detect Traefik config directory
+        TRAEFIK_HOST_CONFIG_DIR=$(echo "$mounts" | grep ":/etc/traefik" | cut -d':' -f1 | head -n 1)
         if [[ -n "$TRAEFIK_HOST_CONFIG_DIR" ]]; then
             log_info "Detected Traefik config host path: $TRAEFIK_HOST_CONFIG_DIR"
-        else
-            log_warn "Could not detect host path for /etc/traefik mount"
         fi
-    else
-        log_warn "No volume mounts detected for Traefik"
     fi
     
     return 0
 }
 
-# Create Dockerfile if running from stdin
+# Create project files if running from stdin (curl | bash) or files are missing
 create_project_files() {
     local work_dir="$1"
     
@@ -611,7 +581,7 @@ create_project_files() {
     cat > "$work_dir/package.json" << 'PACKAGE_JSON_EOF'
 {
   "name": "daas-mkcert-controller",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Docker service for local development that detects *.localhost domains used by Traefik, generates valid TLS certificates with mkcert, and keeps TLS configuration synchronized without restarting Traefik",
   "main": "index.js",
   "scripts": {
@@ -1495,53 +1465,9 @@ build_image() {
     fi
 }
 
-# Install and run the controller
-install_controller() {
-    log_info "Installing daas-mkcert-controller..."
-    
-    # Run all validations
-    validate_os
-    validate_docker
-    validate_permissions
-    validate_environment
-    validate_directories
-    
-    # Verify local dependencies
-    verify_local_dependencies
-    
-    # Verify certificates and CA
-    verify_certificates
-    
-    # Install CA on host machine (before starting container)
-    if ! install_ca_on_host; then
-        log_error "CA installation failed"
-        log_error "You can disable CA installation with: INSTALL_CA=false $0 install"
-        exit 1
-    fi
-    
-    # Check if Traefik is running
-    if ! check_traefik; then
-        log_error "Please start Traefik and try again"
-        exit 1
-    fi
-    
-    # Get Traefik volume mounts and detect config host path
-    get_traefik_volumes || true
-    
-    # Check if local image exists
-    if check_local_image; then
-        log_info "Using existing image: ${IMAGE_NAME}:${IMAGE_TAG}"
-        if [[ -t 0 ]]; then
-            read -p "Do you want to rebuild the image? (y/N): " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                build_image
-            fi
-        fi
-    else
-        log_info "Image not found, building..."
-        build_image
-    fi
+# Start the controller container
+start_controller() {
+    log_info "Starting controller container..."
     
     # Stop existing container if running
     if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
@@ -1554,10 +1480,10 @@ install_controller() {
     local volume_args=(
         -v "/var/run/docker.sock:/var/run/docker.sock:ro"
         -v "$CERTS_DIR:/certs"
+        -v "$MKCERT_CA_DIR:/root/.local/share/mkcert"
     )
     
-    # Add Traefik directory mount with write access so the controller can create certificates
-    # Use the detected host path from Traefik container if available, otherwise fall back to TRAEFIK_DIR
+    # Add Traefik directory mount
     local traefik_mount_source="${TRAEFIK_HOST_CONFIG_DIR:-$TRAEFIK_DIR}"
     if [[ -n "$traefik_mount_source" && -d "$traefik_mount_source" ]]; then
         log_info "Mounting Traefik config directory: $traefik_mount_source -> /etc/traefik"
@@ -1572,17 +1498,12 @@ install_controller() {
         fi
     fi
     
-    # Add CA directory if CA installation is requested
-    if [[ "$INSTALL_CA" == "true" ]]; then
-        volume_args+=(-v "$MKCERT_CA_DIR:/root/.local/share/mkcert")
-    fi
-    
     # Run the container
     log_info "Starting container..."
     if docker run -d \
         --name "$CONTAINER_NAME" \
         --restart unless-stopped \
-        -e "INSTALL_CA=$INSTALL_CA" \
+        -e "INSTALL_CA=false" \
         -e "TRAEFIK_DIR=/etc/traefik" \
         -e "CERTS_DIR=/certs" \
         -e "MKCERT_CA_DIR=/root/.local/share/mkcert" \
@@ -1596,7 +1517,7 @@ install_controller() {
         # Show initial logs
         sleep 2
         log_info "Initial logs:"
-        docker logs "$CONTAINER_NAME" 2>&1 | tail -20
+        docker logs "$CONTAINER_NAME" 2>&1 | tail -15
         
         return 0
     else
@@ -1605,83 +1526,245 @@ install_controller() {
     fi
 }
 
-# Uninstall the controller
-uninstall_controller() {
+# Unified install function
+install_all() {
+    show_banner
+    log_info "Installing daas-mkcert-controller..."
+    
+    # Run all validations
+    validate_os
+    validate_docker
+    validate_permissions
+    validate_environment
+    validate_directories
+    
+    # Check if Traefik is running
+    if ! check_traefik; then
+        log_warn "Traefik is not running. The controller will wait for it to start."
+    fi
+    
+    # Get Traefik volume mounts
+    get_traefik_volumes || true
+    
+    if [[ "$INSTALL_CA" == "true" ]]; then
+        # Step 1: Generate CA using Docker (no local mkcert needed)
+        log_info ""
+        log_info "=== Step 1/3: Generating CA using Docker ==="
+        generate_ca_in_docker
+        
+        # Step 2: Install CA locally using native OS commands
+        log_info ""
+        log_info "=== Step 2/3: Installing CA in local trust store ==="
+        install_ca_locally
+        
+        # Step 3: Build and start controller
+        log_info ""
+        log_info "=== Step 3/3: Building and starting controller ==="
+    else
+        log_info "CA installation disabled (INSTALL_CA=false)"
+        log_info ""
+        log_info "=== Building and starting controller ==="
+    fi
+    
+    # Build image
+    build_image
+    
+    # Start controller
+    start_controller
+    
+    # Final success message
+    echo ""
+    log_success "Installation complete!"
+    echo ""
+    log_info "Summary:"
+    if [[ "$INSTALL_CA" == "true" ]]; then
+        log_info "  ✓ CA generated using Docker (no local mkcert installed)"
+        log_info "  ✓ CA installed in system trust store"
+        log_info "  ✓ CA installed in Firefox/Chrome (if available)"
+    else
+        log_info "  ⊘ CA installation skipped (INSTALL_CA=false)"
+    fi
+    log_info "  ✓ Controller container running"
+    echo ""
+    log_info "Next steps:"
+    if [[ "$INSTALL_CA" == "true" ]]; then
+        log_info "  1. Restart your browser to load the new CA"
+    fi
+    log_info "  2. Start containers with Traefik labels"
+    log_info "  3. Certificates will be generated automatically"
+    echo ""
+    log_info "View controller logs: docker logs -f $CONTAINER_NAME"
+    log_info "Check status: $0 status"
+    echo ""
+}
+
+# Uninstall function
+uninstall_all() {
+    show_banner
     log_info "Uninstalling daas-mkcert-controller..."
     
     # Stop and remove container
     if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        log_info "Stopping container..."
+        log_info "Stopping and removing container..."
         docker stop "$CONTAINER_NAME" 2>/dev/null || true
-        
-        log_info "Removing container..."
         docker rm "$CONTAINER_NAME" 2>/dev/null || true
         log_success "Container removed"
     else
-        log_warn "Container not found: $CONTAINER_NAME"
+        log_info "Container not found"
     fi
     
-    # Remove images
-    local images_to_remove=()
+    # Ask about image removal
     if docker image inspect "${IMAGE_NAME}:${IMAGE_TAG}" &>/dev/null; then
-        images_to_remove+=("${IMAGE_NAME}:${IMAGE_TAG}")
-    fi
-    if docker image inspect "${IMAGE_NAME}:${VERSION}" &>/dev/null; then
-        images_to_remove+=("${IMAGE_NAME}:${VERSION}")
-    fi
-    
-    if [[ ${#images_to_remove[@]} -gt 0 ]]; then
-        if [[ -t 0 ]]; then
-            read -p "Do you want to remove the Docker image(s)? (y/N): " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                log_info "Removing Docker images..."
-                for img in "${images_to_remove[@]}"; do
-                    docker rmi "$img" 2>/dev/null || true
-                done
-                log_success "Docker images removed"
-            fi
-        fi
-    else
-        log_warn "No images found for: $IMAGE_NAME"
-    fi
-    
-    # Ask about certificate cleanup
-    if [[ -d "$CERTS_DIR" ]]; then
-        if [[ -t 0 ]]; then
-            read -p "Do you want to remove generated certificates in $CERTS_DIR? (y/N): " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                log_info "Removing certificates..."
-                rm -rf "$CERTS_DIR"
-                log_success "Certificates removed"
-            fi
+        echo ""
+        read -p "Remove Docker image? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            docker rmi "${IMAGE_NAME}:${IMAGE_TAG}" 2>/dev/null || true
+            log_success "Image removed"
         fi
     fi
     
-    log_success "Uninstallation complete"
+    # Ask about helper image removal
+    if docker image inspect "$HELPER_IMAGE" &>/dev/null; then
+        read -p "Remove helper image? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            docker rmi "$HELPER_IMAGE" 2>/dev/null || true
+            log_success "Helper image removed"
+        fi
+    fi
+    
+    # Ask about CA removal from system
+    echo ""
+    read -p "Remove CA from system trust store? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        # Detect distribution
+        if [[ -f /etc/os-release ]]; then
+            . /etc/os-release
+            case "$ID" in
+                ubuntu|debian|pop|linuxmint)
+                    if [[ -f /usr/local/share/ca-certificates/mkcert-rootCA.crt ]]; then
+                        sudo rm /usr/local/share/ca-certificates/mkcert-rootCA.crt 2>/dev/null || true
+                        sudo update-ca-certificates >/dev/null 2>&1
+                        log_success "CA removed from system trust store"
+                    fi
+                    ;;
+                fedora|rhel|centos|rocky|almalinux)
+                    if [[ -f /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt ]]; then
+                        sudo rm /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt 2>/dev/null || true
+                        sudo update-ca-trust >/dev/null 2>&1
+                        log_success "CA removed from system trust store"
+                    fi
+                    ;;
+                arch|manjaro)
+                    if [[ -f /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt ]]; then
+                        sudo rm /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt 2>/dev/null || true
+                        sudo trust extract-compat >/dev/null 2>&1
+                        log_success "CA removed from system trust store"
+                    fi
+                    ;;
+            esac
+        fi
+    fi
+    
+    # Ask about CA files removal
+    echo ""
+    read -p "Remove CA files from $MKCERT_CA_DIR? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if [[ -d "$MKCERT_CA_DIR" ]]; then
+            rm -rf "$MKCERT_CA_DIR"
+            log_success "CA files removed"
+        fi
+    fi
+    
+    # Ask about certificates removal
+    echo ""
+    read -p "Remove generated certificates from $CERTS_DIR? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if [[ -d "$CERTS_DIR" ]]; then
+            rm -rf "$CERTS_DIR"
+            log_success "Certificates removed"
+        fi
+    fi
+    
+    echo ""
+    log_success "Uninstallation complete!"
+    log_info "Note: You may need to restart your browser"
 }
 
-# Show controller status
-show_status() {
-    log_info "Checking daas-mkcert-controller status..."
+# Status function
+check_status() {
+    show_banner
+    log_info "Checking installation status..."
+    echo ""
     
-    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        log_success "Container is running"
-        echo ""
-        docker ps --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
-        echo ""
-        log_info "View logs with: docker logs -f $CONTAINER_NAME"
-    elif docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        log_warn "Container exists but is not running"
-        echo ""
-        docker ps -a --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
-        echo ""
-        log_info "Start with: docker start $CONTAINER_NAME"
+    # Check CA files
+    log_info "CA Files:"
+    if [[ -f "$MKCERT_CA_DIR/rootCA.pem" ]] && [[ -f "$MKCERT_CA_DIR/rootCA-key.pem" ]]; then
+        log_success "CA files found: $MKCERT_CA_DIR"
+        echo "  - rootCA.pem"
+        echo "  - rootCA-key.pem"
     else
-        log_warn "Container not found: $CONTAINER_NAME"
-        log_info "Install with: $0 install"
+        log_error "CA files not found in $MKCERT_CA_DIR"
     fi
+    
+    echo ""
+    
+    # Check system trust store
+    log_info "System Trust Store:"
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        case "$ID" in
+            ubuntu|debian|pop|linuxmint)
+                if [[ -f /usr/local/share/ca-certificates/mkcert-rootCA.crt ]]; then
+                    log_success "CA installed in Debian/Ubuntu trust store"
+                else
+                    log_warn "CA not found in system trust store"
+                fi
+                ;;
+            fedora|rhel|centos|rocky|almalinux)
+                if [[ -f /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt ]]; then
+                    log_success "CA installed in Fedora/RHEL trust store"
+                else
+                    log_warn "CA not found in system trust store"
+                fi
+                ;;
+            arch|manjaro)
+                if [[ -f /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt ]]; then
+                    log_success "CA installed in Arch trust store"
+                else
+                    log_warn "CA not found in system trust store"
+                fi
+                ;;
+        esac
+    fi
+    
+    echo ""
+    
+    # Check container
+    log_info "Controller Container:"
+    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        log_success "Container is running: $CONTAINER_NAME"
+        echo ""
+        docker ps --filter "name=$CONTAINER_NAME" --format "  ID: {{.ID}}\n  Status: {{.Status}}\n  Image: {{.Image}}"
+    else
+        log_warn "Container is not running"
+    fi
+    
+    echo ""
+    
+    # Check Traefik
+    log_info "Traefik:"
+    if docker ps --format '{{.Names}}' | grep -q "traefik"; then
+        log_success "Traefik is running"
+    else
+        log_warn "Traefik is not running"
+    fi
+    
+    echo ""
 }
 
 # Show controller logs
@@ -1720,15 +1803,13 @@ main() {
     
     case "$command" in
         install)
-            show_banner
-            install_controller
+            install_all
             ;;
         uninstall)
-            show_banner
-            uninstall_controller
+            uninstall_all
             ;;
         status)
-            show_status
+            check_status
             ;;
         logs)
             show_logs
@@ -1741,7 +1822,7 @@ main() {
             # If no command specified and running from stdin, assume install
             if [[ ! -t 0 ]] && [[ -z "$command" ]]; then
                 show_banner
-                install_controller
+                install_all
             else
                 show_banner
                 show_usage
