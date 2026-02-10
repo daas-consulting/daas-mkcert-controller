@@ -1,13 +1,11 @@
 'use strict';
 
-const path = require('path');
-
 /**
  * Prints the daas ASCII logo banner with colored output.
  * Uses figlet graffiti font for "daas" with lolcat-style rainbow colors.
  */
 function printBanner() {
-  const pkg = require(path.join(__dirname, 'package.json'));
+  const pkg = require('./package.json');
   const version = `v${pkg.version}`;
   const product = 'mkcert-controller';
   const company = 'consulting';
