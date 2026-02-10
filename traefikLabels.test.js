@@ -16,8 +16,8 @@ function assert(condition, message) {
 }
 
 function assertDeepEqual(actual, expected, message) {
-  const a = JSON.stringify(actual.sort());
-  const e = JSON.stringify(expected.sort());
+  const a = JSON.stringify([...actual].sort());
+  const e = JSON.stringify([...expected].sort());
   if (a === e) {
     passed++;
     console.log(`  ✓ ${message}`);
