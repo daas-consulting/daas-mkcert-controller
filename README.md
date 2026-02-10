@@ -4,9 +4,10 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 
 ## 🚀 Características
 
+- **🌟 Instalador Unificado (NUEVO)**: Un solo comando para todo sin instalar mkcert en el host - usa Docker + comandos nativos del OS
 - **Instalación con un solo comando**: Script Bash autoinstalable que construye, instala o desinstala completamente el servicio
 - **CA instalada en el host**: La CA de mkcert se instala automáticamente en el host Docker (no en el contenedor) para que los navegadores confíen en los certificados
-- **Auto-instalación de mkcert**: Si mkcert no está presente, el script lo descarga e instala automáticamente
+- **Múltiples métodos de instalación**: Tradicional (con mkcert), Docker-basado, o Unificado (recomendado)
 - **Detección automática de dominios**: Monitorea eventos de Docker y labels de Traefik para detectar dominios `*.localhost` con TLS habilitado
 - **Filtrado por TLS**: Solo genera certificados para rutas que tengan TLS explícitamente habilitado
 - **Generación automática de certificados TLS**: Crea certificados válidos con mkcert sin intervención manual
@@ -15,6 +16,7 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 - **Reconciliación programada**: Verificación automática cada minuto para mantener sincronizados los certificados
 - **Configuración TLS automática**: Genera y mantiene actualizado el archivo `tls.yml` de Traefik
 - **Validación exhaustiva**: Verifica permisos, directorios, dependencias y versiones antes de cualquier operación
+- **Mínimas dependencias**: Solo Docker + herramientas nativas del sistema operativo
 - **Solo para Linux**: Optimizado específicamente para sistemas Linux
 - **Node.js LTS**: Basado en Node.js v24.13.0 LTS
 
@@ -27,10 +29,34 @@ Servicio Docker para desarrollo local que detecta dominios *.localhost usados po
 
 ## 🔧 Instalación Rápida
 
-### Opción 1: Instalación directa con curl (Recomendada)
+### 🌟 Opción 1: Instalador Unificado (NUEVO - Recomendado)
+
+**Proceso unificado sin instalar mkcert en el host**
 
 ```bash
-# Instalación básica (CA se instala automáticamente en el host)
+# Un solo comando instala TODO:
+# 1. Genera CA usando Docker (sin mkcert en host)
+# 2. Instala CA en trust store (comandos nativos del OS)
+# 3. Configura Firefox/Chrome
+# 4. Inicia el controlador
+
+./install-unified.sh install
+```
+
+✨ **Ventajas**:
+- ✅ Sin instalar mkcert en el host
+- ✅ Un solo comando para todo
+- ✅ Mínimas dependencias (solo Docker)
+- ✅ Proceso completamente automático
+
+📖 **Documentación completa**: [INSTALL-UNIFIED.md](INSTALL-UNIFIED.md)
+
+---
+
+### Opción 2: Instalación Tradicional (instala mkcert)
+
+```bash
+# Instalación básica (instala mkcert en el host)
 curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | bash
 
 # Instalación sin CA
@@ -43,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-control
   bash
 ```
 
-### Opción 2: Descarga y ejecución local
+### Opción 3: Descarga y ejecución local
 
 ```bash
 # Descargar el script
@@ -61,15 +87,15 @@ chmod +x install.sh
 INSTALL_CA=false ./install.sh install
 ```
 
-### Opción 3: Instalación sin instalar mkcert en el host
+### Opción 4: Método manual por pasos
 
-Si prefieres no instalar mkcert en tu máquina host, puedes usar el método basado en Docker:
+Si prefieres control total sobre cada paso:
 
 ```bash
 # Ver documentación completa de métodos alternativos
 cat CA-INSTALLATION.md
 
-# O usar el script Docker
+# O usar el script Docker por pasos
 ./install-ca-docker.sh generate  # Genera CA usando Docker
 ./install-ca-docker.sh install   # Instala CA en el sistema
 ./install.sh install              # Instala el controlador
