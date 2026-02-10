@@ -402,8 +402,10 @@ install_ca_locally() {
     
     # Detect distribution
     if [[ -f /etc/os-release ]]; then
+        local _saved_version="$VERSION"
         . /etc/os-release
         local distro="$ID"
+        VERSION="$_saved_version"
     else
         log_error "Cannot detect Linux distribution"
         exit 1
@@ -1641,7 +1643,9 @@ uninstall_all() {
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         # Detect distribution
         if [[ -f /etc/os-release ]]; then
+            local _saved_version="$VERSION"
             . /etc/os-release
+            VERSION="$_saved_version"
             case "$ID" in
                 ubuntu|debian|pop|linuxmint)
                     if [[ -f /usr/local/share/ca-certificates/mkcert-rootCA.crt ]]; then
@@ -1716,7 +1720,9 @@ check_status() {
     # Check system trust store
     log_info "System Trust Store:"
     if [[ -f /etc/os-release ]]; then
+        local _saved_version="$VERSION"
         . /etc/os-release
+        VERSION="$_saved_version"
         case "$ID" in
             ubuntu|debian|pop|linuxmint)
                 if [[ -f /usr/local/share/ca-certificates/mkcert-rootCA.crt ]]; then
