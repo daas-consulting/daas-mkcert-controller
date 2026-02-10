@@ -98,16 +98,21 @@ Commands:
     help        Show this help message
 
 Options:
-    --disable-install-ca    Disable automatic CA installation
+    --install-ca=VALUE      Set CA installation (true/false/yes/no/si/no/1/0)
+    --disable-install-ca    Disable automatic CA installation (alias for --install-ca=false)
 
 Environment Variables:
     CONTAINER_NAME      Container name (default: daas-mkcert-controller)
     IMAGE_NAME          Docker image name (default: daas-mkcert-controller)
     IMAGE_TAG           Docker image tag (default: latest)
-    INSTALL_CA          Install mkcert CA: true/false (default: true)
+    INSTALL_CA          Install mkcert CA (default: true)
+                        Accepted values: true/false, yes/no, si/no, 1/0, t/f, y/n, s/n
     TRAEFIK_DIR         Traefik config directory (default: /etc/traefik)
     CERTS_DIR           Certificates directory (default: /var/lib/daas-mkcert/certs)
     MKCERT_CA_DIR       mkcert CA directory (default: ~/.local/share/mkcert)
+
+Priority:
+    Command-line arguments > Environment variables > Default values
 
 Examples:
     # Install with CA installation (default)
@@ -115,8 +120,11 @@ Examples:
 
     # Install without CA installation
     $0 install --disable-install-ca
+    $0 install --install-ca=false
     # or
     INSTALL_CA=false $0 install
+    INSTALL_CA=no $0 install
+    INSTALL_CA=0 $0 install
 
     # Install with custom directories
     TRAEFIK_DIR=/custom/traefik CERTS_DIR=/custom/certs $0 install
@@ -243,8 +251,13 @@ validate_environment() {
     fi
     
     # Validate INSTALL_CA is boolean
-    if [[ "$INSTALL_CA" != "true" ]] && [[ "$INSTALL_CA" != "false" ]]; then
-        log_fail "INSTALL_CA must be 'true' or 'false'"
+    local install_ca_lower=$(echo "$INSTALL_CA" | tr '[:upper:]' '[:lower:]')
+    if [[ "$install_ca_lower" =~ ^(1|t(rue)?|s(i)?|y(es)?)$ ]]; then
+        INSTALL_CA="true"
+    elif [[ "$install_ca_lower" =~ ^(0|f(alse)?|n(o)?)$ ]]; then
+        INSTALL_CA="false"
+    else
+        log_fail "Invalid value for INSTALL_CA: '$INSTALL_CA'. Use true/false, yes/no, si/no, 1/0"
         exit 1
     fi
     
@@ -446,7 +459,7 @@ COPY package*.json ./
 RUN npm install --production
 
 # Copy application code
-COPY index.js ./
+COPY index.js banner.js parseBool.js ./
 
 # Create directories for certificates
 RUN mkdir -p /certs
@@ -467,9 +480,10 @@ const chokidar = require('chokidar');
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { parseBool } = require('./parseBool');
 
 // Configuration from environment variables
-const INSTALL_CA = process.env.INSTALL_CA !== 'false'; // Install CA by default
+const INSTALL_CA = parseBool(process.env.INSTALL_CA, true, 'INSTALL_CA');
 const TRAEFIK_DIR = process.env.TRAEFIK_DIR || '/etc/traefik';
 const CERTS_DIR = process.env.CERTS_DIR || '/certs';
 const MKCERT_CA_DIR = process.env.MKCERT_CA_DIR || '/root/.local/share/mkcert';
@@ -900,6 +914,152 @@ main().catch((error) => {
 });
 INDEX_JS_EOF
 
+    # Create parseBool.js (embedded)
+    cat > "$work_dir/parseBool.js" << 'PARSEBOOL_JS_EOF'
+'use strict';
+
+/**
+ * Parse a boolean value from a string using locale-aware regex patterns.
+ *
+ * Truthy pattern: ^(1|t(rue)?|s(i)?|y(es)?)  (case-insensitive)
+ * Falsy  pattern: ^(0|f(alse)?|n(o)?)         (case-insensitive)
+ *
+ * @param {string|undefined} value - The string value to parse.
+ * @param {boolean|undefined} defaultValue - Default when value is undefined/null/empty.
+ *   Pass undefined to make the parameter required (throws on missing value).
+ * @param {string} [name] - Parameter name used in error messages.
+ * @returns {boolean} The parsed boolean value.
+ * @throws {Error} When value cannot be parsed or is missing and no default is provided.
+ */
+function parseBool(value, defaultValue, name) {
+  const label = name ? `'${name}'` : 'boolean parameter';
+
+  if (value === undefined || value === null || value === '') {
+    if (defaultValue === undefined) {
+      throw new Error(`Required ${label} is not configured`);
+    }
+    return defaultValue;
+  }
+
+  const v = String(value).trim().toLowerCase();
+
+  if (/^(1|t(rue)?|s(i)?|y(es)?)$/.test(v)) {
+    return true;
+  }
+
+  if (/^(0|f(alse)?|n(o)?)$/.test(v)) {
+    return false;
+  }
+
+  throw new Error(`Invalid value for ${label}: '${value}'. Use true/false, yes/no, si/no, 1/0`);
+}
+
+module.exports = { parseBool };
+PARSEBOOL_JS_EOF
+
+    # Create banner.js (embedded)
+    cat > "$work_dir/banner.js" << 'BANNER_JS_EOF'
+'use strict';
+
+/**
+ * Prints the daas ASCII logo banner with colored output.
+ * Uses figlet graffiti font for "daas" with lolcat-style rainbow colors.
+ */
+function printBanner() {
+  const pkg = require('./package.json');
+  const version = `v${pkg.version}`;
+  const product = 'mkcert-controller';
+  const company = 'consulting';
+  const brand = 'daas';
+
+  // Figlet "daas" in graffiti font (pre-generated)
+  const artLines = [
+    '       .___                     ',
+    '     __| _/____  _____    ______',
+    '    / __ |\\__  \\ \\__  \\  /  ___/',
+    '   / /_/ | / __ \\_/ __ \\_\\___ \\ ',
+    '   \\____ |(____  (____  /____  >',
+    '        \\/     \\/     \\/     \\/ ',
+  ];
+
+  // Determine total width based on the longest art line + padding
+  const totalWidth = 34;
+
+  // Pad art lines to totalWidth with trailing spaces and add left padding
+  const paddedArt = artLines.map((line) => {
+    if (line.length < totalWidth) {
+      return line + ' '.repeat(totalWidth - line.length);
+    }
+    return line;
+  });
+
+  // Build top bar: " daas" left, "mkcert-controller " right
+  const topLeft = ` ${brand}`;
+  const topRight = `${product} `;
+  const topPad = totalWidth - topLeft.length - topRight.length;
+  const topBar = topLeft + ' '.repeat(Math.max(topPad, 1)) + topRight;
+
+  // Build bottom bar: " mkcert-controller" left, "consulting " right
+  const botLeft = ` ${product}`;
+  const botRight = `${company} `;
+  const botPad = totalWidth - botLeft.length - botRight.length;
+  const botBar = botLeft + ' '.repeat(Math.max(botPad, 1)) + botRight;
+
+  // Build version bar: version right-aligned with trailing space
+  const verRight = `${version} `;
+  const verBar = ' '.repeat(totalWidth - verRight.length) + verRight;
+
+  // ANSI color codes
+  const RESET = '\x1b[0m';
+  const BLUE_BG_WHITE = '\x1b[44;37m'; // Blue background, white text
+  const PURPLE_BG_WHITE = '\x1b[45;37m'; // Purple/magenta background, white text
+
+  // Lolcat-style rainbow color palette (256-color)
+  const rainbowColors = [118, 154, 148, 184, 178, 214, 208, 209, 203];
+
+  /**
+   * Apply lolcat-style rainbow coloring to a line of text.
+   * Colors shift across characters, creating a gradient effect.
+   */
+  function colorizeArtLine(line, lineIndex) {
+    let result = '';
+    for (let i = 0; i < line.length; i++) {
+      const colorIdx = Math.floor(
+        ((i + lineIndex * 2) / line.length) * rainbowColors.length
+      );
+      const color =
+        rainbowColors[Math.min(colorIdx, rainbowColors.length - 1)];
+      result += `\x1b[38;5;${color}m${line[i]}\x1b[39m`;
+    }
+    return result;
+  }
+
+  // Print the banner
+  const output = [];
+
+  // Top bar (blue background, white text)
+  output.push(`${BLUE_BG_WHITE}${topBar}${RESET}`);
+
+  // Colored figlet art
+  paddedArt.forEach((line, idx) => {
+    output.push(colorizeArtLine(line, idx));
+  });
+
+  // Bottom bar (blue background, white text)
+  output.push(`${BLUE_BG_WHITE}${botBar}${RESET}`);
+
+  // Version bar (purple background, white text)
+  output.push(`${PURPLE_BG_WHITE}${verBar}${RESET}`);
+
+  // Empty line after banner
+  output.push('');
+
+  console.log(output.join('\n'));
+}
+
+module.exports = { printBanner };
+BANNER_JS_EOF
+
     # Create .dockerignore
     cat > "$work_dir/.dockerignore" << 'DOCKERIGNORE_EOF'
 node_modules
@@ -911,6 +1071,7 @@ README.md
 Dockerfile
 docker-compose.yml
 *.sh
+*.test.js
 DOCKERIGNORE_EOF
 
     log_success "Project files created"
@@ -1158,6 +1319,9 @@ main() {
         case "$arg" in
             --disable-install-ca)
                 INSTALL_CA=false
+                ;;
+            --install-ca=*)
+                INSTALL_CA="${arg#*=}"
                 ;;
             *)
                 if [[ -z "$command" ]]; then

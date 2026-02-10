@@ -6,9 +6,10 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { printBanner } = require('./banner');
+const { parseBool } = require('./parseBool');
 
 // Configuration from environment variables
-const INSTALL_CA = process.env.INSTALL_CA !== 'false'; // Install CA by default
+const INSTALL_CA = parseBool(process.env.INSTALL_CA, true, 'INSTALL_CA');
 const TRAEFIK_DIR = process.env.TRAEFIK_DIR || '/etc/traefik';
 const CERTS_DIR = process.env.CERTS_DIR || '/certs';
 const MKCERT_CA_DIR = process.env.MKCERT_CA_DIR || '/root/.local/share/mkcert';
