@@ -11,13 +11,22 @@ set -e
 # Script version
 VERSION="1.1.0"
 
+# Detect if running as root to choose appropriate default directories
+if [[ $EUID -eq 0 ]]; then
+    _DEFAULT_TRAEFIK_DIR="/etc/traefik"
+    _DEFAULT_CERTS_DIR="/var/lib/daas-mkcert/certs"
+else
+    _DEFAULT_TRAEFIK_DIR="$HOME/.traefik"
+    _DEFAULT_CERTS_DIR="$HOME/.daas-mkcert/certs"
+fi
+
 # Configuration defaults (can be overridden by environment variables)
 CONTAINER_NAME="${CONTAINER_NAME:-daas-mkcert-controller}"
 IMAGE_NAME="${IMAGE_NAME:-daas-mkcert-controller}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 INSTALL_CA="${INSTALL_CA:-true}"
-TRAEFIK_DIR="${TRAEFIK_DIR:-/etc/traefik}"
-CERTS_DIR="${CERTS_DIR:-/var/lib/daas-mkcert/certs}"
+TRAEFIK_DIR="${TRAEFIK_DIR:-$_DEFAULT_TRAEFIK_DIR}"
+CERTS_DIR="${CERTS_DIR:-$_DEFAULT_CERTS_DIR}"
 MKCERT_CA_DIR="${MKCERT_CA_DIR:-$HOME/.local/share/mkcert}"
 
 # Colors for output
@@ -107,8 +116,12 @@ Environment Variables:
     IMAGE_TAG           Docker image tag (default: latest)
     INSTALL_CA          Install mkcert CA (default: true)
                         Accepted values: true/false, yes/no, si/no, 1/0, t/f, y/n, s/n
-    TRAEFIK_DIR         Traefik config directory (default: /etc/traefik)
-    CERTS_DIR           Certificates directory (default: /var/lib/daas-mkcert/certs)
+    TRAEFIK_DIR         Traefik config directory
+                        Default (root):     /etc/traefik
+                        Default (non-root): ~/.traefik
+    CERTS_DIR           Certificates directory
+                        Default (root):     /var/lib/daas-mkcert/certs
+                        Default (non-root): ~/.daas-mkcert/certs
     MKCERT_CA_DIR       mkcert CA directory (default: ~/.local/share/mkcert)
 
 Priority:

@@ -92,8 +92,8 @@ INSTALL_CA=false ./install.sh install
 | `IMAGE_NAME` | Nombre de la imagen Docker | `daas-mkcert-controller` |
 | `IMAGE_TAG` | Tag de la imagen Docker | `latest` |
 | `INSTALL_CA` | Instalar CA de mkcert (`true`/`false`) | `true` |
-| `TRAEFIK_DIR` | Directorio de configuración de Traefik | `/etc/traefik` |
-| `CERTS_DIR` | Directorio para almacenar certificados | `/var/lib/daas-mkcert/certs` |
+| `TRAEFIK_DIR` | Directorio de configuración de Traefik | `/etc/traefik` (root) · `~/.traefik` (non-root) |
+| `CERTS_DIR` | Directorio para almacenar certificados | `/var/lib/daas-mkcert/certs` (root) · `~/.daas-mkcert/certs` (non-root) |
 | `MKCERT_CA_DIR` | Directorio de la CA de mkcert | `~/.local/share/mkcert` |
 | `THROTTLE_MS` | Tiempo de throttle para eventos (ms) | `300` |
 | `SCHEDULED_INTERVAL_MS` | Intervalo de reconciliación programada (ms) | `60000` (1 minuto) |
