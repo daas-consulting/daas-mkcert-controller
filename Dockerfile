@@ -1,4 +1,4 @@
-FROM node:18-alpine
+FROM node:24.13.0-alpine
 
 # Install mkcert and required tools
 RUN apk add --no-cache \
