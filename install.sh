@@ -51,7 +51,7 @@ _syslog_log() {
     local message="$4"
     local priority=$(( _SYSLOG_FACILITY * 8 + severity ))
     local timestamp
-    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")
     local header="<${priority}>1 ${timestamp} ${_HOSTNAME} ${_APP_NAME} $$ - -"
     echo -e "${GRAY}${header}${NC} ${color}[${level}]${NC} ${color}${message}${NC}"
 }
