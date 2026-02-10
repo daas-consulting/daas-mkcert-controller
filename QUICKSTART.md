@@ -3,10 +3,10 @@
 ## Installation
 
 ```bash
-# Quick install (recommended)
+# Quick install (recommended - installs CA on host by default)
 curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | bash
 
-# Install with CA
+# Explicit CA installation on host
 curl -fsSL https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/main/install.sh | INSTALL_CA=true bash
 
 # Download and install
@@ -14,6 +14,8 @@ wget https://raw.githubusercontent.com/daas-consulting/daas-mkcert-controller/ma
 chmod +x install.sh
 ./install.sh install
 ```
+
+**Note**: The CA is installed on the Docker **host** (your machine), not inside the container. This allows browsers on your system to trust the certificates.
 
 ## Commands
 
@@ -31,7 +33,7 @@ chmod +x install.sh
 |----------|---------|-------------|
 | `CONTAINER_NAME` | `daas-mkcert-controller` | Container name |
 | `IMAGE_NAME` | `daas-mkcert-controller:latest` | Docker image name |
-| `INSTALL_CA` | `false` | Install mkcert CA |
+| `INSTALL_CA` | `true` | Install mkcert CA on host machine |
 | `TRAEFIK_DIR` | `/etc/traefik` (root) · `~/.traefik` (non-root) | Traefik config directory |
 | `CERTS_DIR` | `/var/lib/daas-mkcert/certs` (root) · `~/.daas-mkcert/certs` (non-root) | Certificates directory |
 | `MKCERT_CA_DIR` | `~/.local/share/mkcert` | mkcert CA directory |
