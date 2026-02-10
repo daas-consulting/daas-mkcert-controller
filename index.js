@@ -2,7 +2,7 @@
 
 const Docker = require('dockerode');
 const chokidar = require('chokidar');
-const { execSync, exec } = require('child_process');
+const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
