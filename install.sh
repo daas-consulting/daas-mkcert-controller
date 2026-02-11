@@ -756,7 +756,7 @@ function validateAccess(dir, description) {
   }
 }
 
-// Install mkcert CA if requested
+// Verify mkcert CA exists (installation should be done on host, not in container)
 function installCA() {
   if (!INSTALL_CA) {
     log('CA installation not requested (INSTALL_CA != true)', 'INFO');
@@ -767,7 +767,7 @@ function installCA() {
   
   // Validate access to CA directory
   if (!validateAccess(MKCERT_CA_DIR, 'mkcert CA directory')) {
-    log('Cannot install CA: insufficient permissions', 'ERROR');
+    log('Cannot verify CA: insufficient permissions', 'ERROR');
     return false;
   }
 
@@ -777,16 +777,20 @@ function installCA() {
     const rootCA = path.join(MKCERT_CA_DIR, 'rootCA.pem');
     
     if (fs.existsSync(rootCAKey) && fs.existsSync(rootCA)) {
-      log('mkcert CA already exists', 'INFO');
+      log('✓ mkcert CA found and verified', 'INFO');
+      log('Note: CA should be installed on Docker host, not inside container', 'INFO');
       return true;
     }
 
-    log('Installing mkcert CA...', 'INFO');
-    execSync('mkcert -install', { stdio: 'inherit' });
-    log('✓ mkcert CA installed successfully', 'INFO');
-    return true;
+    log('✗ mkcert CA files not found', 'ERROR');
+    log('Expected files:', 'ERROR');
+    log(`  - ${rootCA}`, 'ERROR');
+    log(`  - ${rootCAKey}`, 'ERROR');
+    log('The CA must be installed on the Docker host machine before starting the controller', 'ERROR');
+    log('Run the install.sh script with INSTALL_CA=true to install the CA on the host', 'ERROR');
+    return false;
   } catch (error) {
-    log(`✗ Failed to install mkcert CA: ${error.message}`, 'ERROR');
+    log(`✗ Failed to verify mkcert CA: ${error.message}`, 'ERROR');
     return false;
   }
 }
@@ -838,6 +842,7 @@ function parseTraefikLabels(labels) {
 function extractDomainsFromLabels(labels) {
   const domains = new Set();
   const routers = parseTraefikLabels(labels);
+  log(`Processing labels: ${JSON.stringify(labels)}`, 'DEBUG');
   
   for (const [routerName, router] of Object.entries(routers)) {
     // Only process routers with TLS enabled
@@ -847,13 +852,23 @@ function extractDomainsFromLabels(labels) {
     
     // Extract domains from the rule
     if (router.rule) {
-      const matches = router.rule.match(/Host\(`([^`]+\.localhost)`\)/g);
-      if (matches) {
-        matches.forEach(match => {
-          const domain = match.match(/Host\(`([^`]+)`\)/)[1];
-          if (domain.endsWith('.localhost')) {
-            log(`Found TLS-enabled domain: ${domain} (router: ${routerName})`, 'DEBUG');
-            domains.add(domain);
+      // Match all backtick-quoted domains inside Host() expressions
+      // Supports both single and multiple comma-separated hosts:
+      //   Host(`app.localhost`)
+      //   Host(`app.localhost`, `api.localhost`)
+      const hostMatch = router.rule.match(/Host\(([^)]+)\)/g);
+      if (hostMatch) {
+        hostMatch.forEach(expr => {
+          // Extract all backtick-quoted values from within the Host() expression
+          const domainMatches = expr.match(/`([^`]+)`/g);
+          if (domainMatches) {
+            domainMatches.forEach(quoted => {
+              const domain = quoted.slice(1, -1); // Remove backticks
+              if (domain.endsWith('.localhost')) {
+                log(`Found TLS-enabled domain: ${domain} (router: ${routerName})`, 'DEBUG');
+                domains.add(domain);
+              }
+            });
           }
         });
       }
@@ -1014,7 +1029,8 @@ async function monitorDockerEvents() {
         if (event.Type === 'container' && 
             (event.Action === 'start' || event.Action === 'create' || 
              event.Action === 'die' || event.Action === 'stop')) {
-          log(`Docker event: ${event.Action} for container ${event.Actor.ID.substring(0, 12)}`, 'DEBUG');
+          const attrs = event.Actor.Attributes || {};
+          log(`Docker event: ${event.Action} for container ${event.Actor.ID.substring(0, 12)} (name: ${attrs.name || 'unknown'}, image: ${attrs.image || 'unknown'})`, 'DEBUG');
           scheduleReconcile();
         }
       } catch (error) {
