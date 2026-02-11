@@ -1096,10 +1096,9 @@ function writeTLSConfig(domains) {
       return;
     }
 
-    const certsRelPath = path.relative(dynamicPath, CERTS_DIR);
     const certificates = domains.map(d => ({
-      certFile: `${certsRelPath}/${d}.pem`,
-      keyFile: `${certsRelPath}/${d}-key.pem`
+      certFile: path.join(CERTS_DIR, `${d}.pem`),
+      keyFile: path.join(CERTS_DIR, `${d}-key.pem`)
     }));
 
     const defaultCert = certificates[0];
