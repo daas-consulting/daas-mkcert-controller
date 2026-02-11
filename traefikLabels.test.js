@@ -225,9 +225,12 @@ console.log('Logger callback:');
     'traefik.http.routers.myapp.tls': 'true',
   };
   extractDomainsFromLabels(labels, (msg, level) => logged.push({ msg, level }));
-  assert(logged.length === 1, 'log callback is called once per domain');
-  assert(logged[0].level === 'DEBUG', 'log callback receives DEBUG level');
-  assert(logged[0].msg.includes('myapp.localhost'), 'log callback receives domain in message');
+  assert(logged.length === 2, 'log callback is called for labels processing and once per domain');
+  assert(logged[0].level === 'DEBUG', 'log callback receives DEBUG level for labels processing');
+  assert(logged[0].msg.includes('Processing labels:'), 'log callback logs labels being processed');
+  assert(logged[0].msg.includes('traefik.http.routers.myapp.rule'), 'log callback includes label keys in processing message');
+  assert(logged[1].level === 'DEBUG', 'log callback receives DEBUG level for domain');
+  assert(logged[1].msg.includes('myapp.localhost'), 'log callback receives domain in message');
 }
 
 console.log('');

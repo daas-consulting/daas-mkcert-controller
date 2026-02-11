@@ -308,7 +308,8 @@ async function monitorDockerEvents() {
         if (event.Type === 'container' && 
             (event.Action === 'start' || event.Action === 'create' || 
              event.Action === 'die' || event.Action === 'stop')) {
-          log(`Docker event: ${event.Action} for container ${event.Actor.ID.substring(0, 12)}`, 'DEBUG');
+          const attrs = event.Actor.Attributes || {};
+          log(`Docker event: ${event.Action} for container ${event.Actor.ID.substring(0, 12)} (name: ${attrs.name || 'unknown'}, image: ${attrs.image || 'unknown'})`, 'DEBUG');
           scheduleReconcile();
         }
       } catch (error) {

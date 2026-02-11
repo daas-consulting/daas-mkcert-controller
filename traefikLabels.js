@@ -27,6 +27,7 @@ function extractDomainsFromLabels(labels, log) {
   const _log = typeof log === 'function' ? log : noop;
   const domains = new Set();
   const routers = parseTraefikLabels(labels);
+  _log(`Processing labels: ${JSON.stringify(labels)}`, 'DEBUG');
   
   for (const [routerName, router] of Object.entries(routers)) {
     // Only process routers with TLS enabled
