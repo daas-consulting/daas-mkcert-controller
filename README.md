@@ -91,6 +91,7 @@ chmod +x install.sh
 ### Validación de configuración de Traefik
 
 Durante la instalación, el sistema verifica que Traefik tenga configurado el provider de archivos dinámicos:
+El controller genera automáticamente el archivo `/etc/traefik/dynamic/tls.yml` con la configuración de todos los certificados:
 
 ```yaml
 providers:
