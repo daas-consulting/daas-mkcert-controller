@@ -410,6 +410,14 @@ install_ca_locally() {
         exit 1
     fi
     
+    # Compute CA fingerprint for unique identification
+    local ca_fingerprint
+    ca_fingerprint=$(openssl x509 -in "$MKCERT_CA_DIR/rootCA.pem" -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//;s/://g' | tr '[:upper:]' '[:lower:]')
+    local ca_short_fp="${ca_fingerprint:0:16}"
+    local ca_cert_name="daas-mkcert-rootCA-${ca_short_fp}.crt"
+    log_info "CA fingerprint (SHA-256): ${ca_fingerprint}"
+    log_info "CA trust store filename: ${ca_cert_name}"
+    
     # Detect distribution
     if [[ -f /etc/os-release ]]; then
         local _saved_version="$VERSION"
@@ -426,57 +434,84 @@ install_ca_locally() {
     case "$distro" in
         ubuntu|debian|pop|linuxmint)
             log_info "Installing CA for Debian/Ubuntu-based systems..."
+            local ca_dest="/usr/local/share/ca-certificates/${ca_cert_name}"
             
-            # Check if already installed
-            if [[ -f /usr/local/share/ca-certificates/mkcert-rootCA.crt ]]; then
-                log_info "CA already installed in system trust store"
+            # Remove old CA files from previous installations
+            for old_ca in /usr/local/share/ca-certificates/daas-mkcert-rootCA*.crt /usr/local/share/ca-certificates/mkcert-rootCA.crt; do
+                if [[ -f "$old_ca" ]] && [[ "$old_ca" != "$ca_dest" ]]; then
+                    log_info "Removing old CA: $old_ca"
+                    sudo rm -f "$old_ca" 2>/dev/null || true
+                fi
+            done
+            
+            # Check if already installed with current fingerprint
+            if [[ -f "$ca_dest" ]]; then
+                log_info "CA already installed in system trust store (${ca_cert_name})"
             else
                 # Copy CA to system location
-                if ! sudo cp "$MKCERT_CA_DIR/rootCA.pem" /usr/local/share/ca-certificates/mkcert-rootCA.crt 2>/dev/null; then
+                if ! sudo cp "$MKCERT_CA_DIR/rootCA.pem" "$ca_dest" 2>/dev/null; then
                     log_warn "Could not install CA in system (no sudo access or declined)"
                     log_info "CA generation successful but system trust store not updated"
                 else
                     # Update CA trust store
                     sudo update-ca-certificates >/dev/null 2>&1
-                    log_success "CA installed in system trust store"
+                    log_success "CA installed in system trust store as ${ca_cert_name}"
                 fi
             fi
             ;;
             
         fedora|rhel|centos|rocky|almalinux)
             log_info "Installing CA for Fedora/RHEL-based systems..."
+            local ca_dest="/etc/pki/ca-trust/source/anchors/${ca_cert_name}"
             
-            # Check if already installed
-            if [[ -f /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt ]]; then
-                log_info "CA already installed in system trust store"
+            # Remove old CA files from previous installations
+            for old_ca in /etc/pki/ca-trust/source/anchors/daas-mkcert-rootCA*.crt /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt; do
+                if [[ -f "$old_ca" ]] && [[ "$old_ca" != "$ca_dest" ]]; then
+                    log_info "Removing old CA: $old_ca"
+                    sudo rm -f "$old_ca" 2>/dev/null || true
+                fi
+            done
+            
+            # Check if already installed with current fingerprint
+            if [[ -f "$ca_dest" ]]; then
+                log_info "CA already installed in system trust store (${ca_cert_name})"
             else
                 # Copy CA to system location
-                if ! sudo cp "$MKCERT_CA_DIR/rootCA.pem" /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt 2>/dev/null; then
+                if ! sudo cp "$MKCERT_CA_DIR/rootCA.pem" "$ca_dest" 2>/dev/null; then
                     log_warn "Could not install CA in system (no sudo access or declined)"
                     log_info "CA generation successful but system trust store not updated"
                 else
                     # Update CA trust store
                     sudo update-ca-trust >/dev/null 2>&1
-                    log_success "CA installed in system trust store"
+                    log_success "CA installed in system trust store as ${ca_cert_name}"
                 fi
             fi
             ;;
             
         arch|manjaro)
             log_info "Installing CA for Arch-based systems..."
+            local ca_dest="/etc/ca-certificates/trust-source/anchors/${ca_cert_name}"
             
-            # Check if already installed
-            if [[ -f /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt ]]; then
-                log_info "CA already installed in system trust store"
+            # Remove old CA files from previous installations
+            for old_ca in /etc/ca-certificates/trust-source/anchors/daas-mkcert-rootCA*.crt /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt; do
+                if [[ -f "$old_ca" ]] && [[ "$old_ca" != "$ca_dest" ]]; then
+                    log_info "Removing old CA: $old_ca"
+                    sudo rm -f "$old_ca" 2>/dev/null || true
+                fi
+            done
+            
+            # Check if already installed with current fingerprint
+            if [[ -f "$ca_dest" ]]; then
+                log_info "CA already installed in system trust store (${ca_cert_name})"
             else
                 # Copy CA to system location
-                if ! sudo cp "$MKCERT_CA_DIR/rootCA.pem" /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt 2>/dev/null; then
+                if ! sudo cp "$MKCERT_CA_DIR/rootCA.pem" "$ca_dest" 2>/dev/null; then
                     log_warn "Could not install CA in system (no sudo access or declined)"
                     log_info "CA generation successful but system trust store not updated"
                 else
                     # Update CA trust store
                     sudo trust extract-compat >/dev/null 2>&1
-                    log_success "CA installed in system trust store"
+                    log_success "CA installed in system trust store as ${ca_cert_name}"
                 fi
             fi
             ;;
@@ -1940,25 +1975,32 @@ uninstall_all() {
             VERSION="$_saved_version"
             case "$ID" in
                 ubuntu|debian|pop|linuxmint)
-                    if [[ -f /usr/local/share/ca-certificates/mkcert-rootCA.crt ]]; then
-                        sudo rm /usr/local/share/ca-certificates/mkcert-rootCA.crt 2>/dev/null || true
-                        sudo update-ca-certificates >/dev/null 2>&1
-                        log_success "CA removed from system trust store"
-                    fi
+                    # Remove both old and new naming formats
+                    for old_ca in /usr/local/share/ca-certificates/daas-mkcert-rootCA*.crt /usr/local/share/ca-certificates/mkcert-rootCA.crt; do
+                        if [[ -f "$old_ca" ]]; then
+                            sudo rm -f "$old_ca" 2>/dev/null || true
+                        fi
+                    done
+                    sudo update-ca-certificates >/dev/null 2>&1
+                    log_success "CA removed from system trust store"
                     ;;
                 fedora|rhel|centos|rocky|almalinux)
-                    if [[ -f /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt ]]; then
-                        sudo rm /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt 2>/dev/null || true
-                        sudo update-ca-trust >/dev/null 2>&1
-                        log_success "CA removed from system trust store"
-                    fi
+                    for old_ca in /etc/pki/ca-trust/source/anchors/daas-mkcert-rootCA*.crt /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt; do
+                        if [[ -f "$old_ca" ]]; then
+                            sudo rm -f "$old_ca" 2>/dev/null || true
+                        fi
+                    done
+                    sudo update-ca-trust >/dev/null 2>&1
+                    log_success "CA removed from system trust store"
                     ;;
                 arch|manjaro)
-                    if [[ -f /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt ]]; then
-                        sudo rm /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt 2>/dev/null || true
-                        sudo trust extract-compat >/dev/null 2>&1
-                        log_success "CA removed from system trust store"
-                    fi
+                    for old_ca in /etc/ca-certificates/trust-source/anchors/daas-mkcert-rootCA*.crt /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt; do
+                        if [[ -f "$old_ca" ]]; then
+                            sudo rm -f "$old_ca" 2>/dev/null || true
+                        fi
+                    done
+                    sudo trust extract-compat >/dev/null 2>&1
+                    log_success "CA removed from system trust store"
                     ;;
             esac
         fi
@@ -2017,21 +2059,21 @@ check_status() {
         VERSION="$_saved_version"
         case "$ID" in
             ubuntu|debian|pop|linuxmint)
-                if [[ -f /usr/local/share/ca-certificates/mkcert-rootCA.crt ]]; then
+                if ls /usr/local/share/ca-certificates/daas-mkcert-rootCA*.crt 1>/dev/null 2>&1 || [[ -f /usr/local/share/ca-certificates/mkcert-rootCA.crt ]]; then
                     log_success "CA installed in Debian/Ubuntu trust store"
                 else
                     log_warn "CA not found in system trust store"
                 fi
                 ;;
             fedora|rhel|centos|rocky|almalinux)
-                if [[ -f /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt ]]; then
+                if ls /etc/pki/ca-trust/source/anchors/daas-mkcert-rootCA*.crt 1>/dev/null 2>&1 || [[ -f /etc/pki/ca-trust/source/anchors/mkcert-rootCA.crt ]]; then
                     log_success "CA installed in Fedora/RHEL trust store"
                 else
                     log_warn "CA not found in system trust store"
                 fi
                 ;;
             arch|manjaro)
-                if [[ -f /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt ]]; then
+                if ls /etc/ca-certificates/trust-source/anchors/daas-mkcert-rootCA*.crt 1>/dev/null 2>&1 || [[ -f /etc/ca-certificates/trust-source/anchors/mkcert-rootCA.crt ]]; then
                     log_success "CA installed in Arch trust store"
                 else
                     log_warn "CA not found in system trust store"

@@ -11,6 +11,7 @@ const { parseBool } = require('./parseBool');
 const { validateNotEmpty, validateDirectory } = require('./validateConfig');
 const { parseTraefikLabels, extractDomainsFromLabels } = require('./traefikLabels');
 const { buildTLSConfig } = require('./buildTLSConfig');
+const { validateExistingCertificates, removeInvalidCertificates, getCAFingerprint } = require('./validateCertificates');
 
 // Configuration from environment variables
 const INSTALL_CA = parseBool(process.env.INSTALL_CA, true, 'INSTALL_CA');
@@ -133,6 +134,38 @@ function installCA() {
   } catch (error) {
     log(`✗ Failed to verify mkcert CA: ${error.message}`, 'ERROR');
     return false;
+  }
+}
+
+// Validate existing certificates against current CA and remove invalid ones
+function validateAndRemoveInvalidCerts() {
+  const caPemPath = path.join(MKCERT_CA_DIR, 'rootCA.pem');
+
+  if (!fs.existsSync(caPemPath)) {
+    log('CA certificate not found, skipping certificate validation', 'WARN');
+    return;
+  }
+
+  try {
+    const fingerprint = getCAFingerprint(caPemPath);
+    log(`Current CA fingerprint (SHA-256): ${fingerprint}`, 'INFO');
+  } catch (error) {
+    log(`Could not read CA fingerprint: ${error.message}`, 'WARN');
+  }
+
+  const invalidDomains = validateExistingCertificates(CERTS_DIR, caPemPath, log);
+
+  if (invalidDomains.length > 0) {
+    log(`Found ${invalidDomains.length} certificate(s) not matching current CA, removing...`, 'WARN');
+    const removed = removeInvalidCertificates(invalidDomains, CERTS_DIR, log);
+    log(`Removed ${removed} invalid certificate(s). They will be regenerated on next reconciliation.`, 'INFO');
+
+    // Clear processedDomains so certs get regenerated
+    for (const domain of invalidDomains) {
+      processedDomains.delete(domain);
+    }
+  } else {
+    log('✓ All existing certificates are valid for current CA', 'INFO');
   }
 }
 
@@ -396,6 +429,9 @@ async function main() {
       process.exit(1);
     }
   }
+
+  // Validate existing certificates against current CA
+  validateAndRemoveInvalidCerts();
 
   // Check if Traefik is running
   const traefikRunning = await checkTraefikRunning();

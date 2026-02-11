@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node parseBool.test.js && node validateConfig.test.js && node traefikLabels.test.js && node buildTLSConfig.test.js"
+    "test": "node parseBool.test.js && node validateConfig.test.js && node traefikLabels.test.js && node buildTLSConfig.test.js && node validateCertificates.test.js"
   },
   "keywords": [
     "docker",
