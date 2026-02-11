@@ -25,7 +25,7 @@ COPY package*.json ./
 RUN npm install --production
 
 # Copy application code
-COPY index.js banner.js parseBool.js validateConfig.js traefikLabels.js ./
+COPY index.js banner.js parseBool.js validateConfig.js traefikLabels.js buildTLSConfig.js ./
 
 # Create directories for certificates
 RUN mkdir -p /etc/traefik/dynamic/certs
