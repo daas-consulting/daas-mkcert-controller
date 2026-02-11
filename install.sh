@@ -686,7 +686,7 @@ validate_traefik_config() {
                 if [[ "$file_block_replaced" == false && "$file_block_added" == false ]]; then
                     local p_indent=""
                     for (( i=0; i<providers_indent+2; i++ )); do p_indent+=" "; done
-                    echo "  # Added by daas-mkcert-controller" >> "$tmp_file"
+                    echo "${p_indent}# Added by daas-mkcert-controller" >> "$tmp_file"
                     echo "${p_indent}file:" >> "$tmp_file"
                     echo "${p_indent}  directory: /etc/traefik/dynamic" >> "$tmp_file"
                     echo "${p_indent}  watch: true" >> "$tmp_file"
@@ -747,7 +747,7 @@ validate_traefik_config() {
         # providers block was the last block and we never added file:
         local p_indent=""
         for (( i=0; i<providers_indent+2; i++ )); do p_indent+=" "; done
-        echo "  # Added by daas-mkcert-controller" >> "$tmp_file"
+        echo "${p_indent}# Added by daas-mkcert-controller" >> "$tmp_file"
         echo "${p_indent}file:" >> "$tmp_file"
         echo "${p_indent}  directory: /etc/traefik/dynamic" >> "$tmp_file"
         echo "${p_indent}  watch: true" >> "$tmp_file"
@@ -792,7 +792,7 @@ revert_traefik_config() {
     fi
 
     # Check if the config was modified by this tool
-    if ! grep -q "# Modified by daas-mkcert-controller\|# Added by daas-mkcert-controller" "$config_file" 2>/dev/null; then
+    if ! grep -qE "# (Modified|Added) by daas-mkcert-controller" "$config_file" 2>/dev/null; then
         log_info "Traefik config was not modified by this tool, nothing to revert"
         return 0
     fi
