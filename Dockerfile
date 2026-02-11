@@ -28,7 +28,7 @@ RUN npm install --production
 COPY index.js banner.js parseBool.js validateConfig.js ./
 
 # Create directories for certificates
-RUN mkdir -p /certs
+RUN mkdir -p /etc/traefik/dynamic/certs
 
 # Run as root to access Docker socket and install CA if needed
 USER root
