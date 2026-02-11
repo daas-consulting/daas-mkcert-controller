@@ -11,6 +11,7 @@ const { parseBool } = require('./parseBool');
 const { validateNotEmpty, validateDirectory } = require('./validateConfig');
 const { parseTraefikLabels, extractDomainsFromLabels } = require('./traefikLabels');
 const { buildTLSConfig } = require('./buildTLSConfig');
+const { validateExistingCertificates, removeInvalidCertificates, getCAFingerprint } = require('./validateCertificates');
 
 // Configuration from environment variables
 const INSTALL_CA = parseBool(process.env.INSTALL_CA, true, 'INSTALL_CA');
@@ -136,6 +137,56 @@ function installCA() {
   }
 }
 
+// Get domains that still have valid certificate files in CERTS_DIR
+function getRemainingCertDomains(excludeSet) {
+  try {
+    return fs.readdirSync(CERTS_DIR)
+      .filter(f => f.endsWith('.pem') && !f.endsWith('-key.pem'))
+      .map(f => f.replace(/\.pem$/, ''))
+      .filter(d => !excludeSet || !excludeSet.has(d));
+  } catch (error) {
+    log(`Error reading certificates directory: ${error.message}`, 'ERROR');
+    return [];
+  }
+}
+
+// Validate existing certificates against current CA and remove invalid ones
+function validateAndRemoveInvalidCerts() {
+  const caPemPath = path.join(MKCERT_CA_DIR, 'rootCA.pem');
+
+  if (!fs.existsSync(caPemPath)) {
+    log('CA certificate not found, skipping certificate validation', 'WARN');
+    return;
+  }
+
+  try {
+    const fingerprint = getCAFingerprint(caPemPath);
+    log(`Current CA fingerprint (SHA-256): ${fingerprint}`, 'INFO');
+  } catch (error) {
+    log(`Could not read CA fingerprint: ${error.message}`, 'WARN');
+  }
+
+  const invalidDomains = validateExistingCertificates(CERTS_DIR, caPemPath, log);
+
+  if (invalidDomains.length > 0) {
+    log(`Found ${invalidDomains.length} certificate(s) not matching current CA, removing...`, 'WARN');
+    const removed = removeInvalidCertificates(invalidDomains, CERTS_DIR, log);
+    log(`Removed ${removed} invalid certificate(s). They will be regenerated on next reconciliation.`, 'INFO');
+
+    // Clear processedDomains so certs get regenerated
+    for (const domain of invalidDomains) {
+      processedDomains.delete(domain);
+    }
+
+    // Update tls.yml so Traefik stops referencing removed certificates
+    const invalidSet = new Set(invalidDomains);
+    const remainingDomains = getRemainingCertDomains(invalidSet);
+    writeTLSConfig(remainingDomains);
+  } else {
+    log('✓ All existing certificates are valid for current CA', 'INFO');
+  }
+}
+
 // Check if Traefik is running
 async function checkTraefikRunning() {
   try {
@@ -198,6 +249,10 @@ function writeTLSConfig(domains) {
     
     if (domains.length === 0) {
       log('No domains to configure for TLS', 'DEBUG');
+      if (fs.existsSync(tlsConfigPath)) {
+        fs.unlinkSync(tlsConfigPath);
+        log('Removed tls.yml (no certificates to configure)', 'INFO');
+      }
       return;
     }
 
@@ -396,6 +451,9 @@ async function main() {
       process.exit(1);
     }
   }
+
+  // Validate existing certificates against current CA
+  validateAndRemoveInvalidCerts();
 
   // Check if Traefik is running
   const traefikRunning = await checkTraefikRunning();
