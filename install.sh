@@ -583,6 +583,181 @@ get_traefik_volumes() {
     return 0
 }
 
+# Validate Traefik static configuration (providers.file)
+validate_traefik_config() {
+    log_info "Validating Traefik static configuration..."
+
+    local traefik_config_dir="${TRAEFIK_HOST_CONFIG_DIR:-$TRAEFIK_DIR}"
+    local config_file=""
+
+    # Find config file
+    for name in traefik.yml traefik.yaml traefik.toml; do
+        if [[ -f "$traefik_config_dir/$name" ]]; then
+            config_file="$traefik_config_dir/$name"
+            break
+        fi
+    done
+
+    if [[ -z "$config_file" ]]; then
+        log_warn "No Traefik static configuration file found in $traefik_config_dir"
+        log_info "The controller will create the necessary configuration at runtime"
+        return 0
+    fi
+
+    log_info "Found Traefik config: $config_file"
+
+    # Ensure dynamic directory exists
+    local dynamic_dir="$traefik_config_dir/dynamic"
+    if [[ ! -d "$dynamic_dir" ]]; then
+        log_info "Creating dynamic config directory: $dynamic_dir"
+        mkdir -p "$dynamic_dir" 2>/dev/null || true
+    fi
+
+    # Check if providers.file.directory is already set correctly
+    # Simple grep-based check for YAML files
+    if grep -q "directory:.*\/etc\/traefik\/dynamic" "$config_file" 2>/dev/null && \
+       grep -q "watch:.*true" "$config_file" 2>/dev/null; then
+        log_success "Traefik configuration already has the expected providers.file setup"
+        return 0
+    fi
+
+    # Config needs updating
+    log_warn "Traefik configuration does not match expected providers.file setup"
+    log_info "Expected configuration:"
+    log_info "  providers:"
+    log_info "    file:"
+    log_info "      directory: /etc/traefik/dynamic"
+    log_info "      watch: true"
+
+    # Create backup
+    local timestamp
+    timestamp=$(date +"%Y%m%d-%H%M%S")
+    local ext="${config_file##*.}"
+    local base="${config_file%.*}"
+    local backup_file="${base}-${timestamp}.${ext}.bak"
+
+    cp "$config_file" "$backup_file"
+    log_success "Backup created: $backup_file"
+
+    # Comment out existing providers block and append expected one
+    # Use sed to comment out providers block
+    local tmp_file
+    tmp_file=$(mktemp)
+    local in_providers=false
+    local providers_indent=-1
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        local trimmed="${line#"${line%%[![:space:]]*}"}"
+        local indent=$(( ${#line} - ${#trimmed} ))
+
+        if [[ "$in_providers" == false ]]; then
+            if [[ "$trimmed" =~ ^providers[[:space:]]*: ]]; then
+                in_providers=true
+                providers_indent=$indent
+                echo "# $line" >> "$tmp_file"
+                continue
+            fi
+            echo "$line" >> "$tmp_file"
+        else
+            if [[ -z "$trimmed" || "$trimmed" =~ ^# ]]; then
+                echo "$line" >> "$tmp_file"
+                continue
+            fi
+            if (( indent > providers_indent )); then
+                echo "# $line" >> "$tmp_file"
+            else
+                in_providers=false
+                echo "$line" >> "$tmp_file"
+            fi
+        fi
+    done < "$config_file"
+
+    # Append new providers block
+    {
+        echo ""
+        echo "# Modified by daas-mkcert-controller"
+        echo "providers:"
+        echo "  file:"
+        echo "    directory: /etc/traefik/dynamic"
+        echo "    watch: true"
+    } >> "$tmp_file"
+
+    mv "$tmp_file" "$config_file"
+
+    log_success "Traefik configuration updated"
+    log_info "Previous providers configuration has been commented out"
+    log_warn "Traefik needs to be restarted to apply the new configuration"
+
+    # Find Traefik container name for restart command
+    local traefik_name
+    traefik_name=$(docker ps --format '{{.Names}}' | grep "traefik" | head -n 1)
+    if [[ -n "$traefik_name" ]]; then
+        log_warn "Run: docker restart $traefik_name"
+    else
+        log_warn "Run: docker restart <traefik-container-name>"
+    fi
+
+    return 0
+}
+
+# Revert Traefik configuration changes made by this tool
+revert_traefik_config() {
+    log_info "Checking for Traefik configuration changes to revert..."
+
+    local traefik_config_dir="${TRAEFIK_HOST_CONFIG_DIR:-$TRAEFIK_DIR}"
+    local config_file=""
+
+    # Find config file
+    for name in traefik.yml traefik.yaml traefik.toml; do
+        if [[ -f "$traefik_config_dir/$name" ]]; then
+            config_file="$traefik_config_dir/$name"
+            break
+        fi
+    done
+
+    if [[ -z "$config_file" ]]; then
+        log_info "No Traefik config file found, nothing to revert"
+        return 0
+    fi
+
+    # Check if the config was modified by this tool
+    if ! grep -q "# Modified by daas-mkcert-controller" "$config_file" 2>/dev/null; then
+        log_info "Traefik config was not modified by this tool, nothing to revert"
+        return 0
+    fi
+
+    # Find the latest backup
+    local ext="${config_file##*.}"
+    local base="${config_file%.*}"
+    local latest_backup=""
+
+    for f in "${base}"-*."${ext}".bak; do
+        if [[ -f "$f" ]]; then
+            latest_backup="$f"
+        fi
+    done
+
+    if [[ -z "$latest_backup" ]]; then
+        log_warn "No backup file found to restore"
+        return 1
+    fi
+
+    log_info "Found backup to restore: $latest_backup"
+    cp "$latest_backup" "$config_file"
+    log_success "Traefik configuration reverted from backup: $latest_backup"
+    log_warn "Traefik needs to be restarted to apply the reverted configuration"
+
+    local traefik_name
+    traefik_name=$(docker ps --format '{{.Names}}' | grep "traefik" | head -n 1)
+    if [[ -n "$traefik_name" ]]; then
+        log_warn "Run: docker restart $traefik_name"
+    else
+        log_warn "Run: docker restart <traefik-container-name>"
+    fi
+
+    return 0
+}
+
 # Create project files if running from stdin (curl | bash) or files are missing
 create_project_files() {
     local work_dir="$1"
@@ -1582,6 +1757,9 @@ install_all() {
     # Get Traefik volume mounts
     get_traefik_volumes || true
     
+    # Validate Traefik static configuration
+    validate_traefik_config
+    
     if [[ "$INSTALL_CA" == "true" ]]; then
         # Step 1: Generate CA using Docker (no local mkcert needed)
         log_info ""
@@ -1648,6 +1826,10 @@ uninstall_all() {
     else
         log_info "Container not found"
     fi
+    
+    # Revert Traefik configuration changes
+    get_traefik_volumes || true
+    revert_traefik_config
     
     # Ask about image removal
     if docker image inspect "${IMAGE_NAME}:${IMAGE_TAG}" &>/dev/null; then
