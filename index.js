@@ -137,6 +137,19 @@ function installCA() {
   }
 }
 
+// Get domains that still have valid certificate files in CERTS_DIR
+function getRemainingCertDomains(excludeSet) {
+  try {
+    return fs.readdirSync(CERTS_DIR)
+      .filter(f => f.endsWith('.pem') && !f.endsWith('-key.pem'))
+      .map(f => f.replace(/\.pem$/, ''))
+      .filter(d => !excludeSet || !excludeSet.has(d));
+  } catch (error) {
+    log(`Error reading certificates directory: ${error.message}`, 'ERROR');
+    return [];
+  }
+}
+
 // Validate existing certificates against current CA and remove invalid ones
 function validateAndRemoveInvalidCerts() {
   const caPemPath = path.join(MKCERT_CA_DIR, 'rootCA.pem');
@@ -164,6 +177,11 @@ function validateAndRemoveInvalidCerts() {
     for (const domain of invalidDomains) {
       processedDomains.delete(domain);
     }
+
+    // Update tls.yml so Traefik stops referencing removed certificates
+    const invalidSet = new Set(invalidDomains);
+    const remainingDomains = getRemainingCertDomains(invalidSet);
+    writeTLSConfig(remainingDomains);
   } else {
     log('✓ All existing certificates are valid for current CA', 'INFO');
   }
@@ -231,6 +249,10 @@ function writeTLSConfig(domains) {
     
     if (domains.length === 0) {
       log('No domains to configure for TLS', 'DEBUG');
+      if (fs.existsSync(tlsConfigPath)) {
+        fs.unlinkSync(tlsConfigPath);
+        log('Removed tls.yml (no certificates to configure)', 'INFO');
+      }
       return;
     }
 
