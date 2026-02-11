@@ -75,7 +75,6 @@ function yamlGetValue(content, keyPath) {
   const keys = keyPath.split('.');
   const lines = content.split('\n');
   const indentStack = []; // tracks indent levels per depth
-  let depth = 0;
   let keyIdx = 0;
 
   for (const line of lines) {
