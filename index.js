@@ -14,7 +14,7 @@ const { parseTraefikLabels, extractDomainsFromLabels } = require('./traefikLabel
 // Configuration from environment variables
 const INSTALL_CA = parseBool(process.env.INSTALL_CA, true, 'INSTALL_CA');
 const TRAEFIK_DIR = validateNotEmpty(process.env.TRAEFIK_DIR || '/etc/traefik', 'TRAEFIK_DIR');
-const CERTS_DIR = validateNotEmpty(process.env.CERTS_DIR || path.join(TRAEFIK_DIR, 'certs'), 'CERTS_DIR');
+const CERTS_DIR = validateNotEmpty(process.env.CERTS_DIR || path.join(TRAEFIK_DIR, 'dynamic', 'certs'), 'CERTS_DIR');
 const MKCERT_CA_DIR = validateNotEmpty(process.env.MKCERT_CA_DIR || '/root/.local/share/mkcert', 'MKCERT_CA_DIR');
 const THROTTLE_MS = parseInt(process.env.THROTTLE_MS || '300', 10);
 const SCHEDULED_INTERVAL_MS = parseInt(process.env.SCHEDULED_INTERVAL_MS || '60000', 10); // 1 minute
@@ -187,19 +187,20 @@ function generateCertificate(domain) {
 // Write TLS configuration file for Traefik
 function writeTLSConfig(domains) {
   try {
-    if (!fs.existsSync(TRAEFIK_DIR)) {
-      log(`Creating Traefik directory: ${TRAEFIK_DIR}`, 'INFO');
-      fs.mkdirSync(TRAEFIK_DIR, { recursive: true, mode: 0o755 });
+    const dynamicPath = path.join(TRAEFIK_DIR, 'dynamic');
+    if (!fs.existsSync(dynamicPath)) {
+      log(`Creating Traefik dynamic directory: ${dynamicPath}`, 'INFO');
+      fs.mkdirSync(dynamicPath, { recursive: true, mode: 0o755 });
     }
 
-    const tlsConfigPath = path.join(TRAEFIK_DIR, 'tls.yml');
+    const tlsConfigPath = path.join(dynamicPath, 'tls.yml');
     
     if (domains.length === 0) {
       log('No domains to configure for TLS', 'DEBUG');
       return;
     }
 
-    const certsRelPath = path.relative(TRAEFIK_DIR, CERTS_DIR);
+    const certsRelPath = path.relative(dynamicPath, CERTS_DIR);
     const certificates = domains.map(d => ({
       certFile: `${certsRelPath}/${d}.pem`,
       keyFile: `${certsRelPath}/${d}-key.pem`
@@ -334,16 +335,18 @@ async function scanExistingContainers() {
   await reconcile();
 }
 
-// Monitor Traefik configuration files
+// Monitor Traefik dynamic configuration files
 function monitorTraefikFiles() {
-  if (!fs.existsSync(TRAEFIK_DIR)) {
-    log(`Traefik directory not found: ${TRAEFIK_DIR}`, 'WARN');
+  const dynamicPath = path.join(TRAEFIK_DIR, 'dynamic');
+  
+  if (!fs.existsSync(dynamicPath)) {
+    log(`Traefik dynamic directory not found: ${dynamicPath}`, 'WARN');
     return;
   }
 
-  log(`Starting Traefik files monitoring: ${TRAEFIK_DIR}`, 'INFO');
+  log(`Starting Traefik files monitoring: ${dynamicPath}`, 'INFO');
   
-  const watcher = chokidar.watch(TRAEFIK_DIR, {
+  const watcher = chokidar.watch(dynamicPath, {
     persistent: true,
     ignoreInitial: true,
     depth: 2,
