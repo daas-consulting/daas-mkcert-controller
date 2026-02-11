@@ -639,53 +639,124 @@ validate_traefik_config() {
     cp "$config_file" "$backup_file"
     log_success "Backup created: $backup_file"
 
-    # Comment out existing providers block and append expected one
-    # Use sed to comment out providers block
+    # Merge providers.file into existing providers block (preserving other providers)
     local tmp_file
     tmp_file=$(mktemp)
+    local has_providers=false
     local in_providers=false
+    local in_file_block=false
     local providers_indent=-1
+    local file_block_indent=-1
+    local file_block_replaced=false
+    local file_block_added=false
+
+    # First pass: check if providers: block exists
+    if grep -q "^[[:space:]]*providers[[:space:]]*:" "$config_file" 2>/dev/null; then
+        has_providers=true
+    fi
 
     while IFS= read -r line || [[ -n "$line" ]]; do
         local trimmed="${line#"${line%%[![:space:]]*}"}"
         local indent=$(( ${#line} - ${#trimmed} ))
 
+        if [[ "$has_providers" == false ]]; then
+            # No providers block exists, just copy everything
+            echo "$line" >> "$tmp_file"
+            continue
+        fi
+
         if [[ "$in_providers" == false ]]; then
             if [[ "$trimmed" =~ ^providers[[:space:]]*: ]]; then
                 in_providers=true
                 providers_indent=$indent
-                echo "# $line" >> "$tmp_file"
+                echo "$line" >> "$tmp_file"
                 continue
             fi
             echo "$line" >> "$tmp_file"
         else
+            # Inside providers block
             if [[ -z "$trimmed" || "$trimmed" =~ ^# ]]; then
                 echo "$line" >> "$tmp_file"
                 continue
             fi
-            if (( indent > providers_indent )); then
-                echo "# $line" >> "$tmp_file"
-            else
+
+            if (( indent <= providers_indent )); then
+                # We've left the providers block
+                # If we never found/replaced file: sub-block, add it now
+                if [[ "$file_block_replaced" == false && "$file_block_added" == false ]]; then
+                    local p_indent=""
+                    for (( i=0; i<providers_indent+2; i++ )); do p_indent+=" "; done
+                    echo "  # Added by daas-mkcert-controller" >> "$tmp_file"
+                    echo "${p_indent}file:" >> "$tmp_file"
+                    echo "${p_indent}  directory: /etc/traefik/dynamic" >> "$tmp_file"
+                    echo "${p_indent}  watch: true" >> "$tmp_file"
+                    file_block_added=true
+                fi
                 in_providers=false
+                in_file_block=false
                 echo "$line" >> "$tmp_file"
+                continue
+            fi
+
+            # Still inside providers block (indent > providers_indent)
+            if [[ "$in_file_block" == false ]]; then
+                if [[ "$trimmed" =~ ^file[[:space:]]*: ]]; then
+                    in_file_block=true
+                    file_block_indent=$indent
+                    # Replace file: block with correct values
+                    local p_indent=""
+                    for (( i=0; i<indent; i++ )); do p_indent+=" "; done
+                    echo "# Modified by daas-mkcert-controller" >> "$tmp_file"
+                    echo "${p_indent}file:" >> "$tmp_file"
+                    echo "${p_indent}  directory: /etc/traefik/dynamic" >> "$tmp_file"
+                    echo "${p_indent}  watch: true" >> "$tmp_file"
+                    file_block_replaced=true
+                    continue
+                fi
+                echo "$line" >> "$tmp_file"
+            else
+                # Inside file: sub-block, skip old lines
+                if (( indent > file_block_indent )); then
+                    # Skip old file: sub-block content
+                    continue
+                else
+                    # Left file: sub-block
+                    in_file_block=false
+                    if [[ "$trimmed" =~ ^file[[:space:]]*: ]]; then
+                        # Another file: block? Shouldn't happen, but handle gracefully
+                        continue
+                    fi
+                    echo "$line" >> "$tmp_file"
+                fi
             fi
         fi
     done < "$config_file"
 
-    # Append new providers block
-    {
-        echo ""
-        echo "# Modified by daas-mkcert-controller"
-        echo "providers:"
-        echo "  file:"
-        echo "    directory: /etc/traefik/dynamic"
-        echo "    watch: true"
-    } >> "$tmp_file"
+    # Handle end-of-file cases
+    if [[ "$has_providers" == false ]]; then
+        # No providers block existed, append a complete one
+        {
+            echo ""
+            echo "# Added by daas-mkcert-controller"
+            echo "providers:"
+            echo "  file:"
+            echo "    directory: /etc/traefik/dynamic"
+            echo "    watch: true"
+        } >> "$tmp_file"
+    elif [[ "$in_providers" == true && "$file_block_replaced" == false && "$file_block_added" == false ]]; then
+        # providers block was the last block and we never added file:
+        local p_indent=""
+        for (( i=0; i<providers_indent+2; i++ )); do p_indent+=" "; done
+        echo "  # Added by daas-mkcert-controller" >> "$tmp_file"
+        echo "${p_indent}file:" >> "$tmp_file"
+        echo "${p_indent}  directory: /etc/traefik/dynamic" >> "$tmp_file"
+        echo "${p_indent}  watch: true" >> "$tmp_file"
+    fi
 
     mv "$tmp_file" "$config_file"
 
-    log_success "Traefik configuration updated"
-    log_info "Previous providers configuration has been commented out"
+    log_success "Traefik configuration updated (providers.file merged)"
+    log_info "Existing provider configurations have been preserved"
     log_warn "Traefik needs to be restarted to apply the new configuration"
 
     # Find Traefik container name for restart command
@@ -721,7 +792,7 @@ revert_traefik_config() {
     fi
 
     # Check if the config was modified by this tool
-    if ! grep -q "# Modified by daas-mkcert-controller" "$config_file" 2>/dev/null; then
+    if ! grep -q "# Modified by daas-mkcert-controller\|# Added by daas-mkcert-controller" "$config_file" 2>/dev/null; then
         log_info "Traefik config was not modified by this tool, nothing to revert"
         return 0
     fi
