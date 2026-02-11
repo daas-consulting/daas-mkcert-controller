@@ -10,6 +10,7 @@ const { printBanner, isBannerShown } = require('./banner');
 const { parseBool } = require('./parseBool');
 const { validateNotEmpty, validateDirectory } = require('./validateConfig');
 const { parseTraefikLabels, extractDomainsFromLabels } = require('./traefikLabels');
+const { validateTraefikConfig } = require('./validateTraefikConfig');
 
 // Configuration from environment variables
 const INSTALL_CA = parseBool(process.env.INSTALL_CA, true, 'INSTALL_CA');
@@ -405,6 +406,13 @@ async function main() {
   if (!traefikRunning) {
     log('Cannot start: Traefik is not running', 'ERROR');
     process.exit(1);
+  }
+
+  // Validate Traefik static configuration
+  const traefikConfigResult = validateTraefikConfig(TRAEFIK_DIR, log);
+  if (traefikConfigResult.modified) {
+    log('Traefik configuration was updated by daas-mkcert-controller', 'WARN');
+    traefikConfigResult.messages.forEach(m => log(`  ${m}`, 'INFO'));
   }
 
   // Start monitoring
