@@ -2,7 +2,6 @@
 
 const Docker = require('dockerode');
 const chokidar = require('chokidar');
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -12,6 +11,9 @@ const { validateNotEmpty, validateDirectory } = require('./validateConfig');
 const { parseTraefikLabels, extractDomainsFromLabels } = require('./traefikLabels');
 const { buildTLSConfig } = require('./buildTLSConfig');
 const { validateExistingCertificates, removeInvalidCertificates, getCAFingerprint } = require('./validateCertificates');
+const { extractContainerMetadata, buildLeafSubject } = require('./certSubject');
+const { generateLeafCertificate } = require('./opensslCert');
+const pkg = require('./package.json');
 
 // Configuration from environment variables
 const INSTALL_CA = parseBool(process.env.INSTALL_CA, true, 'INSTALL_CA');
@@ -209,8 +211,8 @@ async function checkTraefikRunning() {
   }
 }
 
-// Generate certificate for a domain
-function generateCertificate(domain) {
+// Generate certificate for a domain using openssl with custom subject
+function generateCertificate(domain, metadata) {
   try {
     const certPath = path.join(CERTS_DIR, `${domain}.pem`);
     const keyPath = path.join(CERTS_DIR, `${domain}-key.pem`);
@@ -223,10 +225,25 @@ function generateCertificate(domain) {
       return;
     }
 
-    log(`Generating certificate for: ${domain}`, 'INFO');
-    execSync(`mkcert -cert-file "${certPath}" -key-file "${keyPath}" "${domain}"`, {
-      cwd: CERTS_DIR,
-      stdio: 'inherit'
+    const caCertPath = path.join(MKCERT_CA_DIR, 'rootCA.pem');
+    const caKeyPath = path.join(MKCERT_CA_DIR, 'rootCA-key.pem');
+
+    if (!fs.existsSync(caCertPath) || !fs.existsSync(caKeyPath)) {
+      log(`✗ CA files not found in ${MKCERT_CA_DIR}, cannot generate certificate`, 'ERROR');
+      return;
+    }
+
+    const meta = metadata || { project: '', service: '' };
+    const subject = buildLeafSubject(domain, meta);
+
+    log(`Generating certificate for: ${domain} (O=${meta.project || 'n/a'}, service=${meta.service || 'n/a'})`, 'INFO');
+    generateLeafCertificate({
+      domain,
+      certPath,
+      keyPath,
+      caCertPath,
+      caKeyPath,
+      subject,
     });
     
     log(`✓ Certificate generated for ${domain}`, 'INFO');
@@ -303,20 +320,29 @@ async function reconcile() {
   try {
     log('Starting reconciliation...', 'DEBUG');
     const containers = await docker.listContainers();
-    const allDomains = new Set();
+    // Map domain -> metadata (preserves container info for certificate subject)
+    const domainMetadata = new Map();
     
     for (const containerInfo of containers) {
       if (containerInfo.Labels) {
         const domains = extractDomainsFromLabels(containerInfo.Labels, log);
-        domains.forEach(d => allDomains.add(d));
+        if (domains.length > 0) {
+          const containerName = (containerInfo.Names && containerInfo.Names[0]) || '';
+          const metadata = extractContainerMetadata(containerInfo.Labels, containerName);
+          domains.forEach(d => {
+            if (!domainMetadata.has(d)) {
+              domainMetadata.set(d, metadata);
+            }
+          });
+        }
       }
     }
     
-    const domainList = Array.from(allDomains);
+    const domainList = Array.from(domainMetadata.keys());
     log(`Found ${domainList.length} TLS-enabled localhost domain(s)`, 'INFO');
     
-    // Generate certificates for all domains
-    domainList.forEach(domain => generateCertificate(domain));
+    // Generate certificates for all domains with container metadata
+    domainList.forEach(domain => generateCertificate(domain, domainMetadata.get(domain)));
     
     // Update TLS configuration file
     writeTLSConfig(domainList);
