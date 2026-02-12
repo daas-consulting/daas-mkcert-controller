@@ -911,12 +911,13 @@ create_project_files() {
   "description": "Docker service for local development that detects *.localhost domains used by Traefik, generates valid TLS certificates with openssl, and keeps TLS configuration synchronized without restarting Traefik",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node parseBool.test.js && node validateConfig.test.js && node traefikLabels.test.js && node buildTLSConfig.test.js && node validateCertificates.test.js && node certSubject.test.js && node opensslCert.test.js"
   },
   "keywords": [
     "docker",
     "traefik",
-    "mkcert",
+    "openssl",
     "tls",
     "certificates",
     "localhost"
@@ -1176,7 +1177,7 @@ async function checkTraefikRunning() {
   }
 }
 
-// Generate certificate for a domain
+// Generate certificate for a domain using openssl with custom subject
 function generateCertificate(domain, metadata) {
   try {
     const certPath = path.join(CERTS_DIR, `${domain}.pem`);
