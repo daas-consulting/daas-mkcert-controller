@@ -22,7 +22,7 @@
 set -e
 
 # Script version
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 # Detect if running as root to choose appropriate default directories
 if [[ $EUID -eq 0 ]]; then
@@ -337,18 +337,16 @@ check_traefik() {
     fi
 }
 
-# Generate CA files using Docker (no local mkcert needed)
-generate_ca_in_docker() {
-    log_info "Generating CA files using Docker..."
-    
-    # Check if CA already exists
-    if [[ -f "$MKCERT_CA_DIR/rootCA.pem" ]] && [[ -f "$MKCERT_CA_DIR/rootCA-key.pem" ]]; then
-        log_warn "CA already exists at $MKCERT_CA_DIR"
-        log_info "Keeping existing CA files"
+# Build or reuse the helper Docker image (mkcert + nss-tools)
+# This image is needed for CA generation AND for NSS trust store operations
+ensure_helper_image() {
+    # Check if helper image already exists
+    if docker image inspect "$HELPER_IMAGE" &>/dev/null; then
+        log_info "Helper image already available: $HELPER_IMAGE"
         return 0
     fi
     
-    log_info "Building helper Docker image with mkcert..."
+    log_info "Building helper Docker image with mkcert + nss-tools..."
     
     # Build helper image
     docker build -t "$HELPER_IMAGE" -f - . << 'DOCKERFILE'
@@ -374,6 +372,21 @@ DOCKERFILE
     fi
     
     log_success "Helper image built: $HELPER_IMAGE"
+}
+
+# Generate CA files using Docker (no local mkcert needed)
+generate_ca_in_docker() {
+    log_info "Generating CA files using Docker..."
+    
+    # Check if CA already exists
+    if [[ -f "$MKCERT_CA_DIR/rootCA.pem" ]] && [[ -f "$MKCERT_CA_DIR/rootCA-key.pem" ]]; then
+        log_warn "CA already exists at $MKCERT_CA_DIR"
+        log_info "Keeping existing CA files"
+        return 0
+    fi
+    
+    # Build helper image if needed
+    ensure_helper_image
     
     # Run mkcert to generate CA files
     log_info "Running mkcert in container to generate CA..."
@@ -523,10 +536,13 @@ install_ca_locally() {
             ;;
     esac
     
+    # Build or reuse helper image for NSS operations (certutil)
+    ensure_helper_image
+    
     # Install in Firefox NSS (if Firefox is installed)
     install_nss_firefox
     
-    # Install in Chrome NSS (if Chrome is installed)
+    # Install in Chrome NSS (if Chrome/Chromium is installed)
     install_nss_chrome
     
     log_success "CA installation complete"
@@ -534,55 +550,82 @@ install_ca_locally() {
 }
 
 # Install CA in Firefox NSS database
+# Supports standard, snap, and flatpak Firefox installations
 install_nss_firefox() {
-    local firefox_dir="$HOME/.mozilla/firefox"
+    # Candidate Firefox profile directories
+    local firefox_dirs=(
+        "$HOME/.mozilla/firefox"
+        "$HOME/snap/firefox/common/.mozilla/firefox"
+        "$HOME/.var/app/org.mozilla.firefox/.mozilla/firefox"
+    )
     
-    if [[ ! -d "$firefox_dir" ]]; then
+    local found_any=false
+    for firefox_dir in "${firefox_dirs[@]}"; do
+        if [[ -d "$firefox_dir" ]]; then
+            found_any=true
+            break
+        fi
+    done
+    
+    if [[ "$found_any" == "false" ]]; then
+        log_info "No Firefox profile directory found, skipping Firefox NSS"
         return 0
     fi
     
     log_info "Installing CA in Firefox NSS database..."
     
-    # Find Firefox profiles
     local installed=false
-    for profile in "$firefox_dir"/*.default* "$firefox_dir"/*.dev-edition-default*; do
-        if [[ -d "$profile" ]]; then
-            local profile_name=$(basename "$profile")
-            
-            # Use Docker with certutil to install in NSS
-            docker run --rm \
-                -v "$MKCERT_CA_DIR:/ca:ro" \
-                -v "$profile:/profile" \
-                "$HELPER_IMAGE" \
-                certutil -A -n "mkcert CA" -t "C,," -i /ca/rootCA.pem -d sql:/profile 2>/dev/null || true
-            
-            installed=true
-        fi
+    for firefox_dir in "${firefox_dirs[@]}"; do
+        [[ ! -d "$firefox_dir" ]] && continue
+        
+        for profile in "$firefox_dir"/*.default* "$firefox_dir"/*.dev-edition-default*; do
+            if [[ -d "$profile" ]]; then
+                local profile_name=$(basename "$profile")
+                log_info "  Updating profile: $profile_name"
+                
+                if docker run --rm \
+                    -v "$MKCERT_CA_DIR:/ca:ro" \
+                    -v "$profile:/profile" \
+                    "$HELPER_IMAGE" \
+                    certutil -A -n "mkcert CA" -t "C,," -i /ca/rootCA.pem -d sql:/profile 2>&1; then
+                    installed=true
+                else
+                    log_warn "  Failed to update Firefox profile: $profile_name"
+                fi
+            fi
+        done
     done
     
     if [[ "$installed" == "true" ]]; then
         log_success "Firefox NSS database updated"
+    else
+        log_warn "No Firefox profiles updated (no profiles found or all failed)"
     fi
 }
 
-# Install CA in Chrome NSS database
+# Install CA in Chrome/Chromium NSS database
 install_nss_chrome() {
     local nssdb="$HOME/.pki/nssdb"
     
     if [[ ! -d "$nssdb" ]]; then
+        log_info "Chrome NSS directory not found ($nssdb), skipping Chrome NSS"
         return 0
     fi
     
-    log_info "Installing CA in Chrome NSS database..."
+    log_info "Installing CA in Chrome/Chromium NSS database..."
     
-    # Use Docker with certutil to install in NSS
-    docker run --rm \
+    if docker run --rm \
         -v "$MKCERT_CA_DIR:/ca:ro" \
         -v "$nssdb:/nssdb" \
         "$HELPER_IMAGE" \
-        certutil -A -n "mkcert CA" -t "C,," -i /ca/rootCA.pem -d sql:/nssdb 2>/dev/null || true
-    
-    log_success "Chrome NSS database updated"
+        certutil -A -n "mkcert CA" -t "C,," -i /ca/rootCA.pem -d sql:/nssdb 2>&1; then
+        log_success "Chrome/Chromium NSS database updated"
+    else
+        log_fail "Failed to install CA in Chrome/Chromium NSS database"
+        log_warn "You may need to manually import the CA in Chrome:"
+        log_warn "  Settings > Privacy and Security > Security > Manage certificates > Authorities > Import"
+        log_warn "  File: $MKCERT_CA_DIR/rootCA.pem"
+    fi
 }
 
 # Get Traefik volume mounts
@@ -874,7 +917,7 @@ create_project_files() {
     cat > "$work_dir/package.json" << 'PACKAGE_JSON_EOF'
 {
   "name": "daas-mkcert-controller",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Docker service for local development that detects *.localhost domains used by Traefik, generates valid TLS certificates with mkcert, and keeps TLS configuration synchronized without restarting Traefik",
   "main": "index.js",
   "scripts": {
@@ -2080,6 +2123,64 @@ check_status() {
                 fi
                 ;;
         esac
+    fi
+    
+    echo ""
+    
+    # Check browser NSS trust stores
+    log_info "Browser NSS Trust Stores:"
+    local nss_checked=false
+    
+    # Chrome/Chromium NSS
+    local nssdb="$HOME/.pki/nssdb"
+    if [[ -d "$nssdb" ]]; then
+        if docker image inspect "$HELPER_IMAGE" &>/dev/null; then
+            if docker run --rm -v "$nssdb:/nssdb:ro" "$HELPER_IMAGE" certutil -d sql:/nssdb -L 2>/dev/null | grep -q "mkcert CA"; then
+                log_success "CA installed in Chrome/Chromium NSS database"
+            else
+                log_warn "CA NOT found in Chrome/Chromium NSS database"
+                log_warn "  Run: $0 install  (to reinstall CA in browser trust stores)"
+            fi
+        else
+            log_warn "Helper image not available — cannot verify Chrome NSS"
+            log_warn "  Run: $0 install  (to rebuild helper image and install CA)"
+        fi
+        nss_checked=true
+    fi
+    
+    # Firefox NSS (standard, snap, flatpak)
+    local firefox_dirs=(
+        "$HOME/.mozilla/firefox"
+        "$HOME/snap/firefox/common/.mozilla/firefox"
+        "$HOME/.var/app/org.mozilla.firefox/.mozilla/firefox"
+    )
+    for firefox_dir in "${firefox_dirs[@]}"; do
+        if [[ -d "$firefox_dir" ]]; then
+            local firefox_type="standard"
+            [[ "$firefox_dir" == *"/snap/"* ]] && firefox_type="snap"
+            [[ "$firefox_dir" == *"/.var/app/"* ]] && firefox_type="flatpak"
+            
+            for profile in "$firefox_dir"/*.default* "$firefox_dir"/*.dev-edition-default*; do
+                if [[ -d "$profile" ]]; then
+                    local pname=$(basename "$profile")
+                    if docker image inspect "$HELPER_IMAGE" &>/dev/null; then
+                        if docker run --rm -v "$profile:/profile:ro" "$HELPER_IMAGE" certutil -d sql:/profile -L 2>/dev/null | grep -q "mkcert CA"; then
+                            log_success "CA installed in Firefox ($firefox_type) profile: $pname"
+                        else
+                            log_warn "CA NOT found in Firefox ($firefox_type) profile: $pname"
+                            log_warn "  Run: $0 install  (to reinstall CA in browser trust stores)"
+                        fi
+                    else
+                        log_warn "Helper image not available — cannot verify Firefox NSS"
+                    fi
+                    nss_checked=true
+                fi
+            done
+        fi
+    done
+    
+    if [[ "$nss_checked" == "false" ]]; then
+        log_info "No browser NSS databases found"
     fi
     
     echo ""
