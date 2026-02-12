@@ -1,14 +1,15 @@
 # daas-mkcert-controller
 
-Servicio Docker para desarrollo local que detecta dominios `*.localhost` usados por Traefik, genera certificados TLS válidos con mkcert y mantiene la configuración TLS sincronizada en caliente, sin reiniciar Traefik ni usar CAs públicas.
+Servicio Docker para desarrollo local que detecta dominios `*.localhost` usados por Traefik, genera certificados TLS válidos con openssl y mantiene la configuración TLS sincronizada en caliente, sin reiniciar Traefik ni usar CAs públicas.
 
 ## Características
 
 - **Instalación con un solo comando** — Script Bash unificado que construye, instala y configura todo el servicio
-- **CA instalada en el host** — La CA de mkcert se instala en el sistema host para que los navegadores confíen en los certificados
+- **CA instalada en el host** — La CA se genera con openssl y se instala en el sistema host para que los navegadores confíen en los certificados
 - **Confianza en navegadores** — Instala la CA en las bases de datos NSS de Chrome/Chromium y Firefox (incluye soporte para instalaciones snap y flatpak)
 - **Detección automática de dominios** — Monitorea eventos de Docker y labels de Traefik para detectar dominios `*.localhost` con TLS habilitado
-- **Generación automática de certificados** — Crea certificados válidos con mkcert sin intervención manual
+- **Generación automática de certificados** — Crea certificados válidos con openssl sin intervención manual
+- **Metadatos de contenedor en certificados** — Enriquece los campos Subject (CN, O, OU) con el nombre del proyecto Docker Compose y servicio
 - **Sincronización en caliente** — Mantiene la configuración TLS actualizada sin reiniciar Traefik
 - **Validación de configuración de Traefik** — Verifica y corrige automáticamente el provider de archivos dinámicos durante la instalación
 - **Reconciliación programada** — Verificación periódica para mantener certificados sincronizados
@@ -84,7 +85,7 @@ chmod +x install.sh
 1. Valida sistema operativo, Docker, permisos y directorios
 2. Detecta la configuración de Traefik y sus volúmenes
 3. Valida la configuración estática de Traefik (providers de archivos dinámicos)
-4. Genera la CA usando un contenedor Docker temporal (sin instalar mkcert en el host)
+4. Genera la CA usando openssl en un contenedor Docker temporal (sin instalar herramientas extra en el host)
 5. Instala la CA en el trust store del sistema usando comandos nativos del OS
 6. Instala la CA en las bases de datos NSS de Chrome/Chromium y Firefox (vía imagen helper Docker con `certutil`)
 7. Construye la imagen Docker del controller
@@ -133,7 +134,7 @@ El controller ejecuta las siguientes tareas dentro del contenedor:
 2. **Monitoreo de eventos Docker** — Detecta cambios en contenedores con throttling configurable
 3. **Monitoreo de archivos Traefik** — Vigila cambios en configuración dinámica
 4. **Reconciliación programada** — Sincroniza certificados periódicamente
-5. **Generación de certificados** — Crea certificados TLS con mkcert
+5. **Generación de certificados** — Crea certificados TLS con openssl, incluyendo metadatos del contenedor en los campos Subject
 6. **Configuración TLS** — Genera y mantiene el archivo `tls.yml` para Traefik
 
 ### Detección de dominios
@@ -201,25 +202,29 @@ El script:
 
 ```
 daas-mkcert-controller/
-├── install.sh              # Script de instalación unificado
-├── index.js                # Aplicación principal del controller
-├── banner.js               # Banner ASCII
+├── install.sh               # Script de instalación unificado
+├── index.js                 # Aplicación principal del controller
+├── banner.js                # Banner ASCII
+├── certSubject.js           # Construcción de Subject para certificados
+├── certSubject.test.js      # Tests de certSubject
+├── opensslCert.js           # Generación de certificados con openssl
+├── opensslCert.test.js      # Tests de opensslCert
 ├── buildTLSConfig.js        # Generación de configuración TLS YAML
 ├── buildTLSConfig.test.js   # Tests de buildTLSConfig
 ├── validateCertificates.js  # Validación de certificados contra CA
 ├── validateCertificates.test.js # Tests de validateCertificates
-├── parseBool.js            # Utilidad de parseo de booleanos
-├── parseBool.test.js       # Tests de parseBool
-├── validateConfig.js       # Validación de configuración y directorios
-├── validateConfig.test.js  # Tests de validateConfig
-├── traefikLabels.js        # Parsing de labels de Traefik
-├── traefikLabels.test.js   # Tests de traefikLabels
-├── Dockerfile              # Imagen Docker del controller
-├── package.json            # Dependencias Node.js
-├── .dockerignore           # Exclusiones del build Docker
-├── .gitignore              # Exclusiones de git
-├── LICENSE                 # Licencia MIT
-└── README.md               # Documentación
+├── parseBool.js             # Utilidad de parseo de booleanos
+├── parseBool.test.js        # Tests de parseBool
+├── validateConfig.js        # Validación de configuración y directorios
+├── validateConfig.test.js   # Tests de validateConfig
+├── traefikLabels.js         # Parsing de labels de Traefik
+├── traefikLabels.test.js    # Tests de traefikLabels
+├── Dockerfile               # Imagen Docker del controller
+├── package.json             # Dependencias Node.js
+├── .dockerignore            # Exclusiones del build Docker
+├── .gitignore               # Exclusiones de git
+├── LICENSE                  # Licencia MIT
+└── README.md                # Documentación
 ```
 
 ## Testing
@@ -277,6 +282,15 @@ newgrp docker                      # Aplicar sin reiniciar sesión
 MIT — ver [LICENSE](LICENSE).
 
 ## Changelog
+
+### v1.4.0
+
+- **Migración de mkcert a openssl** — Se reemplaza mkcert por openssl para la generación de certificados, permitiendo control total sobre los campos Subject de los certificados
+- **Metadatos de contenedor en certificados** — Los certificados ahora incluyen información del proyecto Docker Compose (Organization) y servicio (Organizational Unit) en los campos Subject
+- **CA con identidad DAAS** — El certificado CA se genera con Subject: `CN=DAAS Development CA / O=DAAS Consulting / OU=daas-mkcert-controller v1.4.0`
+- **Nuevos módulos**: `certSubject.js` (construcción de Subject) y `opensslCert.js` (generación de certificados con openssl)
+- **Imagen Docker más ligera** — Se elimina la descarga del binario de mkcert (~5 MB) y se usa openssl del sistema (~1.5 MB)
+- **Imagen helper simplificada** — `daas-mkcert-helper` ya no necesita mkcert, solo nss-tools y openssl
 
 ### v1.3.0
 

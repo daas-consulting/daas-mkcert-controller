@@ -22,7 +22,7 @@
 set -e
 
 # Script version
-VERSION="1.3.0"
+VERSION="1.4.0"
 
 # Detect if running as root to choose appropriate default directories
 if [[ $EUID -eq 0 ]]; then
@@ -337,7 +337,7 @@ check_traefik() {
     fi
 }
 
-# Build or reuse the helper Docker image (mkcert + nss-tools)
+# Build or reuse the helper Docker image (openssl + nss-tools)
 # This image is needed for CA generation AND for NSS trust store operations
 ensure_helper_image() {
     # Check if helper image already exists
@@ -346,22 +346,12 @@ ensure_helper_image() {
         return 0
     fi
     
-    log_info "Building helper Docker image with mkcert + nss-tools..."
+    log_info "Building helper Docker image with openssl + nss-tools..."
     
     # Build helper image
     docker build -t "$HELPER_IMAGE" -f - . << 'DOCKERFILE'
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates nss-tools \
-    && ARCH=$(uname -m) \
-    && case "$ARCH" in \
-        x86_64) MKCERT_ARCH="amd64"; MKCERT_SHA256="6d31c65b03972c6dc4a14ab429f2928300518b26503f58723e532d1b0a3bbb52" ;; \
-        aarch64) MKCERT_ARCH="arm64"; MKCERT_SHA256="b98f2cc69fd9147fe4d405d859c57504571adec0d3611c3eefd04107c7ac00d0" ;; \
-        armv7l) MKCERT_ARCH="arm"; MKCERT_SHA256="2f22ff62dfc13357e147e027117724e7ce1ff810e30d2b061b05b668ecb4f1d7" ;; \
-        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
-    esac \
-    && wget -qO /usr/local/bin/mkcert "https://github.com/FiloSottile/mkcert/releases/download/v1.4.4/mkcert-v1.4.4-linux-${MKCERT_ARCH}" \
-    && echo "${MKCERT_SHA256}  /usr/local/bin/mkcert" | sha256sum -c - \
-    && chmod +x /usr/local/bin/mkcert
+RUN apk add --no-cache ca-certificates nss-tools openssl
 WORKDIR /work
 CMD ["/bin/sh"]
 DOCKERFILE
@@ -374,7 +364,7 @@ DOCKERFILE
     log_success "Helper image built: $HELPER_IMAGE"
 }
 
-# Generate CA files using Docker (no local mkcert needed)
+# Generate CA files using Docker (openssl-based, no mkcert needed)
 generate_ca_in_docker() {
     log_info "Generating CA files using Docker..."
     
@@ -388,13 +378,13 @@ generate_ca_in_docker() {
     # Build helper image if needed
     ensure_helper_image
     
-    # Run mkcert to generate CA files
-    log_info "Running mkcert in container to generate CA..."
+    # Generate CA certificate with openssl using custom subject
+    local ca_subject="/CN=DAAS Development CA/O=DAAS Consulting/OU=daas-mkcert-controller v${VERSION}"
+    log_info "Generating CA with openssl (subject: ${ca_subject})..."
     docker run --rm \
-        -v "$MKCERT_CA_DIR:/root/.local/share/mkcert" \
-        -e CAROOT=/root/.local/share/mkcert \
+        -v "$MKCERT_CA_DIR:/ca" \
         "$HELPER_IMAGE" \
-        sh -c 'mkcert -install 2>&1 | grep -v "trust store" || true; ls -la /root/.local/share/mkcert/'
+        sh -c "openssl genrsa -out /ca/rootCA-key.pem 4096 2>/dev/null && openssl req -x509 -new -nodes -key /ca/rootCA-key.pem -sha256 -days 3650 -out /ca/rootCA.pem -subj '${ca_subject}' && ls -la /ca/"
     
     if [[ $? -ne 0 ]]; then
         log_fail "Failed to generate CA files in Docker"
@@ -917,8 +907,8 @@ create_project_files() {
     cat > "$work_dir/package.json" << 'PACKAGE_JSON_EOF'
 {
   "name": "daas-mkcert-controller",
-  "version": "1.3.0",
-  "description": "Docker service for local development that detects *.localhost domains used by Traefik, generates valid TLS certificates with mkcert, and keeps TLS configuration synchronized without restarting Traefik",
+  "version": "1.4.0",
+  "description": "Docker service for local development that detects *.localhost domains used by Traefik, generates valid TLS certificates with openssl, and keeps TLS configuration synchronized without restarting Traefik",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -944,20 +934,10 @@ PACKAGE_JSON_EOF
     cat > "$work_dir/Dockerfile" << 'DOCKERFILE_EOF'
 FROM node:24.13.0-alpine
 
-# Install required tools and mkcert binary
+# Install required tools (openssl replaces mkcert for certificate generation)
 RUN apk add --no-cache \
     ca-certificates \
-    nss-tools \
-    && ARCH=$(uname -m) \
-    && case "$ARCH" in \
-        x86_64) MKCERT_ARCH="amd64"; MKCERT_SHA256="6d31c65b03972c6dc4a14ab429f2928300518b26503f58723e532d1b0a3bbb52" ;; \
-        aarch64) MKCERT_ARCH="arm64"; MKCERT_SHA256="b98f2cc69fd9147fe4d405d859c57504571adec0d3611c3eefd04107c7ac00d0" ;; \
-        armv7l) MKCERT_ARCH="arm"; MKCERT_SHA256="2f22ff62dfc13357e147e027117724e7ce1ff810e30d2b061b05b668ecb4f1d7" ;; \
-        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
-    esac \
-    && wget -qO /usr/local/bin/mkcert "https://github.com/FiloSottile/mkcert/releases/download/v1.4.4/mkcert-v1.4.4-linux-${MKCERT_ARCH}" \
-    && echo "${MKCERT_SHA256}  /usr/local/bin/mkcert" | sha256sum -c - \
-    && chmod +x /usr/local/bin/mkcert
+    openssl
 
 # Create app directory
 WORKDIR /app
@@ -969,7 +949,7 @@ COPY package*.json ./
 RUN npm install --production
 
 # Copy application code
-COPY index.js banner.js parseBool.js validateConfig.js ./
+COPY index.js banner.js parseBool.js validateConfig.js traefikLabels.js buildTLSConfig.js validateCertificates.js certSubject.js opensslCert.js ./
 
 # Create directories for certificates
 RUN mkdir -p /etc/traefik/dynamic/certs
@@ -987,13 +967,18 @@ DOCKERFILE_EOF
 
 const Docker = require('dockerode');
 const chokidar = require('chokidar');
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { printBanner, isBannerShown } = require('./banner');
 const { parseBool } = require('./parseBool');
 const { validateNotEmpty, validateDirectory } = require('./validateConfig');
+const { parseTraefikLabels, extractDomainsFromLabels } = require('./traefikLabels');
+const { buildTLSConfig } = require('./buildTLSConfig');
+const { validateExistingCertificates, removeInvalidCertificates, getCAFingerprint } = require('./validateCertificates');
+const { extractContainerMetadata, buildLeafSubject } = require('./certSubject');
+const { generateLeafCertificate } = require('./opensslCert');
+const pkg = require('./package.json');
 
 // Configuration from environment variables
 const INSTALL_CA = parseBool(process.env.INSTALL_CA, true, 'INSTALL_CA');
@@ -1119,6 +1104,56 @@ function installCA() {
   }
 }
 
+// Get domains that still have valid certificate files in CERTS_DIR
+function getRemainingCertDomains(excludeSet) {
+  try {
+    return fs.readdirSync(CERTS_DIR)
+      .filter(f => f.endsWith('.pem') && !f.endsWith('-key.pem'))
+      .map(f => f.replace(/\.pem$/, ''))
+      .filter(d => !excludeSet || !excludeSet.has(d));
+  } catch (error) {
+    log(`Error reading certificates directory: ${error.message}`, 'ERROR');
+    return [];
+  }
+}
+
+// Validate existing certificates against current CA and remove invalid ones
+function validateAndRemoveInvalidCerts() {
+  const caPemPath = path.join(MKCERT_CA_DIR, 'rootCA.pem');
+
+  if (!fs.existsSync(caPemPath)) {
+    log('CA certificate not found, skipping certificate validation', 'WARN');
+    return;
+  }
+
+  try {
+    const fingerprint = getCAFingerprint(caPemPath);
+    log(`Current CA fingerprint (SHA-256): ${fingerprint}`, 'INFO');
+  } catch (error) {
+    log(`Could not read CA fingerprint: ${error.message}`, 'WARN');
+  }
+
+  const invalidDomains = validateExistingCertificates(CERTS_DIR, caPemPath, log);
+
+  if (invalidDomains.length > 0) {
+    log(`Found ${invalidDomains.length} certificate(s) not matching current CA, removing...`, 'WARN');
+    const removed = removeInvalidCertificates(invalidDomains, CERTS_DIR, log);
+    log(`Removed ${removed} invalid certificate(s). They will be regenerated on next reconciliation.`, 'INFO');
+
+    // Clear processedDomains so certs get regenerated
+    for (const domain of invalidDomains) {
+      processedDomains.delete(domain);
+    }
+
+    // Update tls.yml so Traefik stops referencing removed certificates
+    const invalidSet = new Set(invalidDomains);
+    const remainingDomains = getRemainingCertDomains(invalidSet);
+    writeTLSConfig(remainingDomains);
+  } else {
+    log('✓ All existing certificates are valid for current CA', 'INFO');
+  }
+}
+
 // Check if Traefik is running
 async function checkTraefikRunning() {
   try {
@@ -1141,69 +1176,8 @@ async function checkTraefikRunning() {
   }
 }
 
-// Parse Traefik labels into a structured object
-function parseTraefikLabels(labels) {
-  const routers = {};
-  
-  for (const [key, value] of Object.entries(labels)) {
-    // Parse label keys like: traefik.http.routers.myrouter.rule
-    const routerMatch = key.match(/^traefik\.http\.routers\.([^.]+)\.(.+)$/);
-    if (routerMatch) {
-      const routerName = routerMatch[1];
-      const property = routerMatch[2];
-      
-      if (!routers[routerName]) {
-        routers[routerName] = {};
-      }
-      routers[routerName][property] = value;
-    }
-  }
-  
-  return routers;
-}
-
-// Extract localhost domains from Traefik labels (only if TLS is enabled)
-function extractDomainsFromLabels(labels) {
-  const domains = new Set();
-  const routers = parseTraefikLabels(labels);
-  log(`Processing labels: ${JSON.stringify(labels)}`, 'DEBUG');
-  
-  for (const [routerName, router] of Object.entries(routers)) {
-    // Only process routers with TLS enabled
-    if (!router.tls || router.tls !== 'true') {
-      continue;
-    }
-    
-    // Extract domains from the rule
-    if (router.rule) {
-      // Match all backtick-quoted domains inside Host() expressions
-      // Supports both single and multiple comma-separated hosts:
-      //   Host(`app.localhost`)
-      //   Host(`app.localhost`, `api.localhost`)
-      const hostMatch = router.rule.match(/Host\(([^)]+)\)/g);
-      if (hostMatch) {
-        hostMatch.forEach(expr => {
-          // Extract all backtick-quoted values from within the Host() expression
-          const domainMatches = expr.match(/`([^`]+)`/g);
-          if (domainMatches) {
-            domainMatches.forEach(quoted => {
-              const domain = quoted.slice(1, -1); // Remove backticks
-              if (domain.endsWith('.localhost')) {
-                log(`Found TLS-enabled domain: ${domain} (router: ${routerName})`, 'DEBUG');
-                domains.add(domain);
-              }
-            });
-          }
-        });
-      }
-    }
-  }
-  
-  return Array.from(domains);
-}
-
 // Generate certificate for a domain
-function generateCertificate(domain) {
+function generateCertificate(domain, metadata) {
   try {
     const certPath = path.join(CERTS_DIR, `${domain}.pem`);
     const keyPath = path.join(CERTS_DIR, `${domain}-key.pem`);
@@ -1216,10 +1190,25 @@ function generateCertificate(domain) {
       return;
     }
 
-    log(`Generating certificate for: ${domain}`, 'INFO');
-    execSync(`mkcert -cert-file "${certPath}" -key-file "${keyPath}" "${domain}"`, {
-      cwd: CERTS_DIR,
-      stdio: 'inherit'
+    const caCertPath = path.join(MKCERT_CA_DIR, 'rootCA.pem');
+    const caKeyPath = path.join(MKCERT_CA_DIR, 'rootCA-key.pem');
+
+    if (!fs.existsSync(caCertPath) || !fs.existsSync(caKeyPath)) {
+      log(`✗ CA files not found in ${MKCERT_CA_DIR}, cannot generate certificate`, 'ERROR');
+      return;
+    }
+
+    const meta = metadata || { project: '', service: '' };
+    const subject = buildLeafSubject(domain, meta);
+
+    log(`Generating certificate for: ${domain} (O=${meta.project || 'n/a'}, service=${meta.service || 'n/a'})`, 'INFO');
+    generateLeafCertificate({
+      domain,
+      certPath,
+      keyPath,
+      caCertPath,
+      caKeyPath,
+      subject,
     });
     
     log(`✓ Certificate generated for ${domain}`, 'INFO');
@@ -1242,6 +1231,10 @@ function writeTLSConfig(domains) {
     
     if (domains.length === 0) {
       log('No domains to configure for TLS', 'DEBUG');
+      if (fs.existsSync(tlsConfigPath)) {
+        fs.unlinkSync(tlsConfigPath);
+        log('Removed tls.yml (no certificates to configure)', 'INFO');
+      }
       return;
     }
 
@@ -1250,19 +1243,7 @@ function writeTLSConfig(domains) {
       keyFile: path.join(CERTS_DIR, `${d}-key.pem`)
     }));
 
-    const defaultCert = certificates[0];
-    const yml = `# Auto-generated by daas-mkcert-controller
-# Do not edit manually
-tls:
-  stores:
-    default:
-      defaultCertificate:
-        certFile: ${defaultCert.certFile}
-        keyFile: ${defaultCert.keyFile}
-  certificates:
-${certificates.map(cert => `    - certFile: ${cert.certFile}
-      keyFile: ${cert.keyFile}`).join('\n')}
-`;
+    const yml = buildTLSConfig(certificates);
 
     fs.writeFileSync(tlsConfigPath, yml);
     log(`✓ TLS configuration updated with ${domains.length} certificate(s)`, 'INFO');
@@ -1304,20 +1285,29 @@ async function reconcile() {
   try {
     log('Starting reconciliation...', 'DEBUG');
     const containers = await docker.listContainers();
-    const allDomains = new Set();
+    // Map domain -> metadata (preserves container info for certificate subject)
+    const domainMetadata = new Map();
     
     for (const containerInfo of containers) {
       if (containerInfo.Labels) {
-        const domains = extractDomainsFromLabels(containerInfo.Labels);
-        domains.forEach(d => allDomains.add(d));
+        const domains = extractDomainsFromLabels(containerInfo.Labels, log);
+        if (domains.length > 0) {
+          const containerName = (containerInfo.Names && containerInfo.Names[0]) || '';
+          const metadata = extractContainerMetadata(containerInfo.Labels, containerName);
+          domains.forEach(d => {
+            if (!domainMetadata.has(d)) {
+              domainMetadata.set(d, metadata);
+            }
+          });
+        }
       }
     }
     
-    const domainList = Array.from(allDomains);
+    const domainList = Array.from(domainMetadata.keys());
     log(`Found ${domainList.length} TLS-enabled localhost domain(s)`, 'INFO');
     
-    // Generate certificates for all domains
-    domainList.forEach(domain => generateCertificate(domain));
+    // Generate certificates for all domains with container metadata
+    domainList.forEach(domain => generateCertificate(domain, domainMetadata.get(domain)));
     
     // Update TLS configuration file
     writeTLSConfig(domainList);
@@ -1452,6 +1442,9 @@ async function main() {
       process.exit(1);
     }
   }
+
+  // Validate existing certificates against current CA
+  validateAndRemoveInvalidCerts();
 
   // Check if Traefik is running
   const traefikRunning = await checkTraefikRunning();
@@ -1763,6 +1756,455 @@ function isBannerShown() {
 
 module.exports = { printBanner, isBannerShown };
 BANNER_JS_EOF
+
+    # Create traefikLabels.js (embedded)
+    cat > "$work_dir/traefikLabels.js" << 'TRAEFIKLABELS_JS_EOF'
+'use strict';
+
+// Parse Traefik labels into a structured object
+function parseTraefikLabels(labels) {
+  const routers = {};
+  
+  for (const [key, value] of Object.entries(labels)) {
+    // Parse label keys like: traefik.http.routers.myrouter.rule
+    const routerMatch = key.match(/^traefik\.http\.routers\.([^.]+)\.(.+)$/);
+    if (routerMatch) {
+      const routerName = routerMatch[1];
+      const property = routerMatch[2];
+      
+      if (!routers[routerName]) {
+        routers[routerName] = {};
+      }
+      routers[routerName][property] = value;
+    }
+  }
+  
+  return routers;
+}
+
+// Extract localhost domains from Traefik labels (only if TLS is enabled)
+function extractDomainsFromLabels(labels, log) {
+  const noop = () => {};
+  const _log = typeof log === 'function' ? log : noop;
+  const domains = new Set();
+  const routers = parseTraefikLabels(labels);
+  _log(`Processing labels: ${JSON.stringify(labels)}`, 'DEBUG');
+  
+  for (const [routerName, router] of Object.entries(routers)) {
+    // Only process routers with TLS enabled
+    if (!router.tls || router.tls !== 'true') {
+      continue;
+    }
+    
+    // Extract domains from the rule
+    if (router.rule) {
+      // Match all backtick-quoted domains inside Host() expressions
+      // Supports both single and multiple comma-separated hosts:
+      //   Host(`app.localhost`)
+      //   Host(`app.localhost`, `api.localhost`)
+      const hostMatch = router.rule.match(/Host\(([^)]+)\)/g);
+      if (hostMatch) {
+        hostMatch.forEach(expr => {
+          // Extract all backtick-quoted values from within the Host() expression
+          const domainMatches = expr.match(/`([^`]+)`/g);
+          if (domainMatches) {
+            domainMatches.forEach(quoted => {
+              const domain = quoted.slice(1, -1); // Remove backticks
+              if (domain.endsWith('.localhost')) {
+                _log(`Found TLS-enabled domain: ${domain} (router: ${routerName})`, 'DEBUG');
+                domains.add(domain);
+              }
+            });
+          }
+        });
+      }
+    }
+  }
+  
+  return Array.from(domains);
+}
+
+module.exports = { parseTraefikLabels, extractDomainsFromLabels };
+TRAEFIKLABELS_JS_EOF
+
+    # Create buildTLSConfig.js (embedded)
+    cat > "$work_dir/buildTLSConfig.js" << 'BUILDTLSCONFIG_JS_EOF'
+'use strict';
+
+/**
+ * Build TLS YAML configuration string for Traefik.
+ *
+ * Includes a `tls.stores.default.defaultCertificate` section so that Traefik
+ * file-provider certificates are placed in a TLS store and actually served
+ * to clients.  Without the store definition Traefik loads the certificates
+ * but falls back to its own default self-signed certificate.
+ *
+ * @param {Array<{certFile: string, keyFile: string}>} certificates
+ * @returns {string} YAML content for tls.yml
+ */
+function buildTLSConfig(certificates) {
+  if (!certificates || certificates.length === 0) {
+    return '';
+  }
+
+  const defaultCert = certificates[0];
+
+  return `# Auto-generated by daas-mkcert-controller
+# Do not edit manually
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: ${defaultCert.certFile}
+        keyFile: ${defaultCert.keyFile}
+  certificates:
+${certificates.map(cert => `    - certFile: ${cert.certFile}
+      keyFile: ${cert.keyFile}`).join('\n')}
+`;
+}
+
+module.exports = { buildTLSConfig };
+BUILDTLSCONFIG_JS_EOF
+
+    # Create validateCertificates.js (embedded)
+    cat > "$work_dir/validateCertificates.js" << 'VALIDATECERTIFICATES_JS_EOF'
+'use strict';
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+
+/**
+ * Get the SHA-256 fingerprint of a CA certificate.
+ * This fingerprint uniquely identifies the CA.
+ *
+ * @param {string} caPemPath - Path to the CA PEM file
+ * @returns {string} SHA-256 fingerprint (colon-separated hex)
+ */
+function getCAFingerprint(caPemPath) {
+  const caPem = fs.readFileSync(caPemPath);
+  const ca = new crypto.X509Certificate(caPem);
+  return ca.fingerprint256;
+}
+
+/**
+ * Check if a certificate was issued by the given CA.
+ *
+ * @param {string} certPemPath - Path to the certificate PEM file
+ * @param {string} caPemPath - Path to the CA PEM file
+ * @returns {boolean} true if the certificate was issued by the CA
+ */
+function isCertIssuedByCA(certPemPath, caPemPath) {
+  const certPem = fs.readFileSync(certPemPath);
+  const caPem = fs.readFileSync(caPemPath);
+  const cert = new crypto.X509Certificate(certPem);
+  const ca = new crypto.X509Certificate(caPem);
+  return cert.checkIssued(ca);
+}
+
+/**
+ * Validate all existing certificates in a directory against the current CA.
+ * Returns the list of domains whose certificates are NOT issued by the current CA.
+ *
+ * @param {string} certsDir - Directory containing certificate files
+ * @param {string} caPemPath - Path to the CA PEM file
+ * @param {Function} [log] - Optional logging function (message, level)
+ * @returns {string[]} List of domain names with invalid certificates
+ */
+function validateExistingCertificates(certsDir, caPemPath, log) {
+  const _log = typeof log === 'function' ? log : () => {};
+  const invalidDomains = [];
+
+  if (!fs.existsSync(certsDir)) {
+    _log(`Certificates directory does not exist: ${certsDir}`, 'DEBUG');
+    return invalidDomains;
+  }
+
+  if (!fs.existsSync(caPemPath)) {
+    _log(`CA certificate not found: ${caPemPath}`, 'WARN');
+    return invalidDomains;
+  }
+
+  const fingerprint = getCAFingerprint(caPemPath);
+  _log(`Current CA fingerprint (SHA-256): ${fingerprint}`, 'INFO');
+
+  let certFiles;
+  try {
+    certFiles = fs.readdirSync(certsDir)
+      .filter(f => f.endsWith('.pem') && !f.endsWith('-key.pem'));
+  } catch (error) {
+    _log(`Error reading certificates directory: ${error.message}`, 'ERROR');
+    return invalidDomains;
+  }
+
+  if (certFiles.length === 0) {
+    _log('No existing certificates to validate', 'DEBUG');
+    return invalidDomains;
+  }
+
+  _log(`Validating ${certFiles.length} existing certificate(s) against current CA...`, 'INFO');
+
+  const caPem = fs.readFileSync(caPemPath);
+  const ca = new crypto.X509Certificate(caPem);
+
+  for (const certFile of certFiles) {
+    const domain = certFile.replace(/\.pem$/, '');
+    const certPath = path.join(certsDir, certFile);
+
+    try {
+      const certPem = fs.readFileSync(certPath);
+      const cert = new crypto.X509Certificate(certPem);
+
+      if (!cert.checkIssued(ca)) {
+        _log(`Certificate for ${domain} was NOT issued by current CA`, 'WARN');
+        invalidDomains.push(domain);
+      } else {
+        _log(`Certificate for ${domain} is valid (issued by current CA)`, 'DEBUG');
+      }
+    } catch (error) {
+      _log(`Error validating certificate for ${domain}: ${error.message}`, 'WARN');
+      invalidDomains.push(domain);
+    }
+  }
+
+  return invalidDomains;
+}
+
+/**
+ * Remove certificate and key files for the given domains.
+ *
+ * @param {string[]} domains - List of domain names to remove
+ * @param {string} certsDir - Directory containing certificate files
+ * @param {Function} [log] - Optional logging function (message, level)
+ * @returns {number} Number of certificate pairs removed
+ */
+function removeInvalidCertificates(domains, certsDir, log) {
+  const _log = typeof log === 'function' ? log : () => {};
+  let removed = 0;
+
+  for (const domain of domains) {
+    const certPath = path.join(certsDir, `${domain}.pem`);
+    const keyPath = path.join(certsDir, `${domain}-key.pem`);
+
+    try {
+      let didRemove = false;
+      if (fs.existsSync(certPath)) {
+        fs.unlinkSync(certPath);
+        didRemove = true;
+      }
+      if (fs.existsSync(keyPath)) {
+        fs.unlinkSync(keyPath);
+        didRemove = true;
+      }
+      if (didRemove) {
+        _log(`Removed invalid certificate for ${domain}`, 'INFO');
+        removed++;
+      }
+    } catch (error) {
+      _log(`Error removing certificate for ${domain}: ${error.message}`, 'ERROR');
+    }
+  }
+
+  return removed;
+}
+
+module.exports = {
+  getCAFingerprint,
+  isCertIssuedByCA,
+  validateExistingCertificates,
+  removeInvalidCertificates,
+};
+VALIDATECERTIFICATES_JS_EOF
+
+    # Create certSubject.js (embedded)
+    cat > "$work_dir/certSubject.js" << 'CERTSUBJECT_JS_EOF'
+'use strict';
+
+/**
+ * Default values for certificate subject fields.
+ */
+const DEFAULTS = {
+  caOrganization: 'DAAS Consulting',
+  caCN: 'DAAS Development CA',
+  toolName: 'daas-mkcert-controller',
+};
+
+/**
+ * Extract meaningful metadata from Docker container labels.
+ *
+ * Looks for Docker Compose labels to identify the project and service.
+ * Falls back to container name if Compose labels are not present.
+ *
+ * @param {Object} labels - Docker container labels
+ * @param {string} [containerName] - Container name as fallback
+ * @returns {{ project: string, service: string }}
+ */
+function extractContainerMetadata(labels, containerName) {
+  const project = labels['com.docker.compose.project'] || '';
+  const service = labels['com.docker.compose.service'] || '';
+
+  // Fallback: derive from container name (strip trailing -N replica suffix)
+  if (!project && containerName) {
+    const cleaned = containerName.replace(/^\//, '').replace(/-\d+$/, '');
+    return { project: cleaned, service: '' };
+  }
+
+  return { project, service };
+}
+
+/**
+ * Build the Subject string for a leaf (domain) certificate.
+ *
+ * Format: /CN=<domain>/O=<project>/OU=<service> | daas-mkcert-controller
+ *
+ * @param {string} domain - The domain name (e.g. "app.localhost")
+ * @param {{ project: string, service: string }} metadata - Container metadata
+ * @param {string} [toolName] - Tool name for OU suffix
+ * @returns {string} OpenSSL subject string
+ */
+function buildLeafSubject(domain, metadata, toolName) {
+  const tool = toolName || DEFAULTS.toolName;
+  const cn = domain;
+  const o = metadata.project || tool;
+  const ouParts = [];
+  if (metadata.service) ouParts.push(metadata.service);
+  ouParts.push(tool);
+  const ou = ouParts.join(' | ');
+
+  return `/CN=${cn}/O=${o}/OU=${ou}`;
+}
+
+/**
+ * Build the Subject string for the CA certificate.
+ *
+ * Format: /CN=DAAS Development CA/O=DAAS Consulting/OU=daas-mkcert-controller vX.Y.Z
+ *
+ * @param {string} version - Controller version (e.g. "1.4.0")
+ * @param {Object} [options] - Optional overrides
+ * @param {string} [options.cn] - Custom CN
+ * @param {string} [options.organization] - Custom Organization
+ * @param {string} [options.toolName] - Custom tool name
+ * @returns {string} OpenSSL subject string
+ */
+function buildCASubject(version, options) {
+  const opts = options || {};
+  const cn = opts.cn || DEFAULTS.caCN;
+  const o = opts.organization || DEFAULTS.caOrganization;
+  const tool = opts.toolName || DEFAULTS.toolName;
+  const ou = `${tool} v${version}`;
+
+  return `/CN=${cn}/O=${o}/OU=${ou}`;
+}
+
+module.exports = {
+  DEFAULTS,
+  extractContainerMetadata,
+  buildLeafSubject,
+  buildCASubject,
+};
+CERTSUBJECT_JS_EOF
+
+    # Create opensslCert.js (embedded)
+    cat > "$work_dir/opensslCert.js" << 'OPENSSLCERT_JS_EOF'
+'use strict';
+
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+/**
+ * Generate a leaf certificate signed by the given CA using openssl.
+ *
+ * @param {Object} options
+ * @param {string} options.domain - Domain name for the certificate
+ * @param {string} options.certPath - Output path for the certificate PEM
+ * @param {string} options.keyPath - Output path for the private key PEM
+ * @param {string} options.caCertPath - Path to the CA certificate PEM
+ * @param {string} options.caKeyPath - Path to the CA private key PEM
+ * @param {string} options.subject - OpenSSL subject string (e.g. "/CN=.../O=.../OU=...")
+ * @param {number} [options.days=825] - Certificate validity in days
+ */
+function generateLeafCertificate(options) {
+  const {
+    domain,
+    certPath,
+    keyPath,
+    caCertPath,
+    caKeyPath,
+    subject,
+    days = 825,
+  } = options;
+
+  // Create a temporary directory for CSR and extension config
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daas-cert-'));
+  const csrPath = path.join(tmpDir, 'cert.csr');
+  const extPath = path.join(tmpDir, 'cert.ext');
+
+  try {
+    // Write extension config with SAN
+    const extContent = [
+      'authorityKeyIdentifier=keyid,issuer',
+      'basicConstraints=CA:FALSE',
+      'keyUsage=digitalSignature,keyEncipherment',
+      'extendedKeyUsage=serverAuth',
+      `subjectAltName=DNS:${domain}`,
+    ].join('\n');
+    fs.writeFileSync(extPath, extContent);
+
+    // Generate private key
+    execSync(`openssl genrsa -out "${keyPath}" 2048 2>/dev/null`);
+
+    // Generate CSR
+    execSync(
+      `openssl req -new -key "${keyPath}" -out "${csrPath}" -subj "${subject}"`,
+      { stdio: 'pipe' }
+    );
+
+    // Sign with CA
+    execSync(
+      `openssl x509 -req -in "${csrPath}" -CA "${caCertPath}" -CAkey "${caKeyPath}"` +
+        ` -CAcreateserial -out "${certPath}" -days ${days} -sha256 -extfile "${extPath}"`,
+      { stdio: 'pipe' }
+    );
+  } finally {
+    // Clean up temp files
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch (_) {
+      // Ignore cleanup errors
+    }
+  }
+}
+
+/**
+ * Generate a self-signed CA certificate using openssl.
+ *
+ * @param {Object} options
+ * @param {string} options.certPath - Output path for the CA certificate PEM
+ * @param {string} options.keyPath - Output path for the CA private key PEM
+ * @param {string} options.subject - OpenSSL subject string for the CA
+ * @param {number} [options.days=3650] - CA validity in days (default ~10 years)
+ */
+function generateCACertificate(options) {
+  const { certPath, keyPath, subject, days = 3650 } = options;
+
+  // Generate CA private key
+  execSync(`openssl genrsa -out "${keyPath}" 4096 2>/dev/null`);
+
+  // Generate self-signed CA certificate
+  execSync(
+    `openssl req -x509 -new -nodes -key "${keyPath}" -sha256` +
+      ` -days ${days} -out "${certPath}" -subj "${subject}"`,
+    { stdio: 'pipe' }
+  );
+}
+
+module.exports = {
+  generateLeafCertificate,
+  generateCACertificate,
+};
+OPENSSLCERT_JS_EOF
 
     # Create .dockerignore
     cat > "$work_dir/.dockerignore" << 'DOCKERIGNORE_EOF'
