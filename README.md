@@ -6,6 +6,7 @@ Servicio Docker para desarrollo local que detecta dominios `*.localhost` usados 
 
 - **Instalación con un solo comando** — Script Bash unificado que construye, instala y configura todo el servicio
 - **CA instalada en el host** — La CA de mkcert se instala en el sistema host para que los navegadores confíen en los certificados
+- **Confianza en navegadores** — Instala la CA en las bases de datos NSS de Chrome/Chromium y Firefox (incluye soporte para instalaciones snap y flatpak)
 - **Detección automática de dominios** — Monitorea eventos de Docker y labels de Traefik para detectar dominios `*.localhost` con TLS habilitado
 - **Generación automática de certificados** — Crea certificados válidos con mkcert sin intervención manual
 - **Sincronización en caliente** — Mantiene la configuración TLS actualizada sin reiniciar Traefik
@@ -85,8 +86,24 @@ chmod +x install.sh
 3. Valida la configuración estática de Traefik (providers de archivos dinámicos)
 4. Genera la CA usando un contenedor Docker temporal (sin instalar mkcert en el host)
 5. Instala la CA en el trust store del sistema usando comandos nativos del OS
-6. Construye la imagen Docker del controller
-7. Inicia el contenedor del controller
+6. Instala la CA en las bases de datos NSS de Chrome/Chromium y Firefox (vía imagen helper Docker con `certutil`)
+7. Construye la imagen Docker del controller
+8. Inicia el contenedor del controller
+
+### Instalación de CA en navegadores
+
+Los navegadores basados en Chromium y Firefox no usan el trust store del sistema directamente. Utilizan bases de datos NSS (Network Security Services) propias:
+
+| Navegador | Base de datos NSS |
+|-----------|-------------------|
+| Chrome/Chromium | `~/.pki/nssdb` |
+| Firefox (estándar) | `~/.mozilla/firefox/<profile>/` |
+| Firefox (snap) | `~/snap/firefox/common/.mozilla/firefox/<profile>/` |
+| Firefox (flatpak) | `~/.var/app/org.mozilla.firefox/.mozilla/firefox/<profile>/` |
+
+El instalador construye una imagen Docker auxiliar (`daas-mkcert-helper`) con `certutil` para inyectar la CA en estas bases de datos sin necesidad de instalar `libnss3-tools` en el host.
+
+Si la imagen auxiliar no existe (por ejemplo, después de un `docker image prune`), el instalador la reconstruye automáticamente.
 
 ### Validación de configuración de Traefik
 
@@ -187,6 +204,10 @@ daas-mkcert-controller/
 ├── install.sh              # Script de instalación unificado
 ├── index.js                # Aplicación principal del controller
 ├── banner.js               # Banner ASCII
+├── buildTLSConfig.js        # Generación de configuración TLS YAML
+├── buildTLSConfig.test.js   # Tests de buildTLSConfig
+├── validateCertificates.js  # Validación de certificados contra CA
+├── validateCertificates.test.js # Tests de validateCertificates
 ├── parseBool.js            # Utilidad de parseo de booleanos
 ├── parseBool.test.js       # Tests de parseBool
 ├── validateConfig.js       # Validación de configuración y directorios
@@ -223,6 +244,27 @@ docker logs daas-mkcert-controller # Revisar logs del controller
 - Verificar que los dominios terminan en `.localhost`
 - Revisar logs: `docker logs -f daas-mkcert-controller`
 
+### El navegador no confía en los certificados
+
+```bash
+./install.sh status                # Verificar CA en NSS de Chrome/Firefox
+./install.sh install               # Reinstalar — reconstruye helper e instala CA en NSS
+```
+
+Causas comunes:
+- La imagen `daas-mkcert-helper` fue eliminada (por `docker image prune` o desinstalación parcial)
+- Firefox instalado vía snap/flatpak — el instalador v1.3.0+ busca en rutas alternativas
+- Después de reinstalar, **reiniciar el navegador** para que cargue la nueva CA
+
+Verificación manual:
+```bash
+# Chrome/Chromium
+docker run --rm -v ~/.pki/nssdb:/nssdb:ro daas-mkcert-helper:latest certutil -d sql:/nssdb -L | grep mkcert
+
+# Firefox (snap)
+docker run --rm -v ~/snap/firefox/common/.mozilla/firefox/<profile>:/p:ro daas-mkcert-helper:latest certutil -d sql:/p -L | grep mkcert
+```
+
 ### Error de permisos
 
 ```bash
@@ -233,5 +275,29 @@ newgrp docker                      # Aplicar sin reiniciar sesión
 ## Licencia
 
 MIT — ver [LICENSE](LICENSE).
+
+## Changelog
+
+### v1.3.0
+
+- **Fix: CA no se instalaba en navegadores** — La imagen helper Docker (`daas-mkcert-helper`) solo se construía durante la generación de CA. Si la CA ya existía (reinstalación), la imagen no se construía y la instalación en NSS fallaba silenciosamente. Ahora `ensure_helper_image()` se ejecuta siempre antes de las operaciones NSS.
+- **Soporte para Firefox snap y flatpak** — Se detectan perfiles de Firefox en `~/snap/firefox/common/.mozilla/firefox/` y `~/.var/app/org.mozilla.firefox/.mozilla/firefox/` además de la ruta estándar.
+- **Mejora en manejo de errores NSS** — Los errores de instalación en NSS ya no se suprimen silenciosamente. Se reportan al usuario con instrucciones de remediación.
+- **Comando `status` mejorado** — Ahora verifica y reporta el estado de las bases de datos NSS de Chrome y Firefox, no solo el trust store del sistema.
+
+### v1.2.0
+
+- Validación de certificados existentes contra la CA actual
+- Remoción automática de certificados inválidos
+- Fingerprint de CA para identificación única
+
+### v1.1.0
+
+- `buildTLSConfig` con `tls.stores.default.defaultCertificate`
+- Soporte para múltiples hosts en `Host()` separados por coma
+
+### v1.0.0
+
+- Versión inicial
 
 **DAAS Consulting**
